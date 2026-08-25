@@ -4,21 +4,15 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.fft import fft, fftfreq
 
-# Load the audio file
 print("Loading audio file...")
-y, sr = librosa.load("audio_files/Howls moving castle (Merry-Go-Round of Life).mp3")
-print(f"Audio file loaded. Sample rate: {sr} Hz")
-
-# Plot the audio signal
-fig, axes = plt.subplots(2, 1, figsize=(10, 8))
-
+y, sr = librosa.load("audio_files/E2.mp3")
+print("Audio file loaded.")
 y, _ = librosa.effects.trim(y, top_db=20)
-duration = 6090
-y = y[44100:44100+duration]  # Zoom in on a specific segment of the audio signal
+# y = y[0:12000]
 
-pd.Series(y).plot(ax=axes[0], lw=1, title="Zoom Signal Audio")
+fig, axes = plt.subplots(2, 1, figsize=(10, 8))
+pd.Series(y).plot(lw=1, title="Signal Audio", ax=axes[0])
 
-# Compute the FFT of the audio signal
 print("Computing FFT...")
 N = len(y)
 
@@ -32,6 +26,7 @@ axes[1].plot(positive_frequencies, magnitude)
 axes[1].set_title("Magnitude Spectrum")
 axes[1].set_xlabel("Frequency (Hz)")
 axes[1].set_ylabel("Amplitude")
-axes[1].set_xlim(0, 3000)
+axes[1].set_xlim(0, 1000)
+
 plt.tight_layout()
 plt.show()
