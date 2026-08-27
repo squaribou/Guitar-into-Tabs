@@ -3,6 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.fft import fft, fftfreq
 
+from basics import loading_audio_file
 from constantes import *
 
 def get_fft(audio):
@@ -15,11 +16,8 @@ def get_fft(audio):
     magnitude = (2/N) * np.abs(spectrum[pos_mask])
     return positive_frequencies, magnitude
 
-def main():
-    print("Loading audio file...")
-    raw_audio, _ = librosa.load("audio_files/E2.mp3")
-    audio, _ = librosa.effects.trim(raw_audio, top_db=20)
-    print("Audio file loaded.")
+def plot_fft(file_path):
+    audio = loading_audio_file(file_path)
 
     _, axes = plt.subplots(2, 1, figsize=(10, 8))
     times = np.arange(len(audio)) / SAMPLE_RATE
@@ -41,4 +39,5 @@ def main():
     plt.show()
 
 if __name__ == "__main__":
-    main()
+    file_path = "audio_files/B3.mp3"
+    plot_fft(file_path)
