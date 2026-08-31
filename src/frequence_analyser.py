@@ -1,10 +1,10 @@
-import librosa
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.fft import fft, fftfreq
+from scipy.signal import find_peaks
 
 from basics import loading_audio_file
-from constantes import *
+from constants import *
 
 def get_fft(audio):
     """Compute the FFT of the audio signal"""
@@ -16,7 +16,9 @@ def get_fft(audio):
     magnitude = (2/N) * np.abs(spectrum[pos_mask])
     return positive_frequencies, magnitude
 
+
 def plot_fft(file_path):
+    """Plot the fft of an andio"""
     audio = loading_audio_file(file_path)
 
     _, axes = plt.subplots(2, 1, figsize=(10, 8))
@@ -37,6 +39,25 @@ def plot_fft(file_path):
     print("Window displayed.")
     plt.tight_layout()
     plt.show()
+
+
+def top_2_fundamental_frequencies(fft_frequencies, fft_magnitude, min_freq=60.0):
+    """Get the top 2 frequencies in the spectrum"""
+    peak_indices, _ = find_peaks(fft_magnitude, height=np.max(fft_magnitude) * 0.05)
+    
+    peak_freqs = fft_frequencies[peak_indices]
+    peak_mags = fft_magnitude[peak_indices]
+    
+    mask = peak_freqs >= min_freq
+    peak_freqs = peak_freqs[mask]
+    peak_mags = peak_mags[mask]
+    
+    if len(peak_freqs) == 0:
+        return []
+    
+    top_2_idx = np.argsort(peak_mags)[::-1][:2]
+    return peak_freqs[top_2_idx].tolist()
+
 
 if __name__ == "__main__":
     file_path = "audio_files/B3.mp3"

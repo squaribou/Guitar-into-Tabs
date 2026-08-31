@@ -4,53 +4,55 @@ import matplotlib.pyplot as plt
 
 import matplotlib.animation as animation
 import sounddevice as sd
-import time
 
-from constantes import *
-from basics import loading_audio_file
+from constants import *
+from basics import loading_audio_file, predict_from_array, extract_note_attacks
 
-# ______________Testing parameters______________
-speed_factor = 0.25
 
-# ______________Testing script______________
-audio = loading_audio_file("audio_files/Howls moving castle (Merry-Go-Round of Life).mp3", duration_in_seconds = 5)
-audio_stretched = librosa.effects.time_stretch(audio, rate=speed_factor)
-print("Audio stretched")
+def listen_audio(file_path, starting_time_in_seconds=0, duration_in_seconds=None, speed_factor=1):
+    """
+    Launch the audio and display a window with the signal,
+    we can see a cursor indicate us at which time we are and the note attacks
+    """
 
-print("Searching for onsets...")
-onset_samples = librosa.onset.onset_detect(
-    y=audio,
-    sr=SAMPLE_RATE,
-    units='samples',
-    backtrack=False,
-    delta=DELTA,
-    wait=WAIT
-)
-onset_samples = np.concatenate(([0], onset_samples, [len(audio)]))
-onset_times = librosa.samples_to_time(onset_samples, sr=SAMPLE_RATE)
+    audio = loading_audio_file(file_path, starting_time_in_seconds, duration_in_seconds)
+    audio_stretched = librosa.effects.time_stretch(audio, rate=speed_factor)
+    model_output, _, _ = predict_from_array(audio)
+    attacks = extract_note_attacks(model_output["onset"])
 
-fig, ax = plt.subplots(figsize=(10, 5))
-stretch_times = np.arange(len(audio_stretched)) * speed_factor / SAMPLE_RATE
-ax.plot(stretch_times, audio_stretched, lw=1)
-for onset in onset_times:
-    ax.axvline(x=onset, color='r', linestyle='--', lw=1, alpha=0.7)
-ax.set_title("Lecture en cours...")
-ax.set_xlabel("Temps (s)")
+    fig, ax = plt.subplots(figsize=(10, 5))
+    stretch_times = np.arange(len(audio_stretched)) * speed_factor / SAMPLE_RATE
+    ax.plot(stretch_times, audio_stretched, lw=1)
+    ax.set_title("Lecture en cours...")
+    ax.set_xlabel("Temps (s)")
 
-cursor_line = ax.axvline(x=0, color='r', lw=1.5)
+    for t, pitches in attacks:
+        ax.axvline(x=t, ymin=0, ymax=0.5, color='b', linestyle='--', lw=1, alpha=0.7)
 
-# Démarre la lecture
-print("Playing audio...")
-sd.play(audio_stretched, SAMPLE_RATE)
-start_time = time.time()
+    cursor_line = ax.axvline(x=0, color='g', lw=1.5)
 
-def update(frame):
-    elapsed = time.time() - start_time
-    audio_elapsed = elapsed * speed_factor
-    cursor_line.set_xdata([audio_elapsed, audio_elapsed])
-    if audio_elapsed > stretch_times[-1]:
-        ani.event_source.stop()
-    return cursor_line,
+    frames_played = 0
 
-ani = animation.FuncAnimation(fig, update, interval=30, blit=True)
-plt.show()
+    def audio_callback(outdata, frames, time_info, status):
+        nonlocal frames_played
+        chunk = audio_stretched[frames_played:frames_played + frames]
+        if len(chunk) < frames:
+            outdata[:len(chunk), 0] = chunk
+            outdata[len(chunk):, 0] = 0
+            raise sd.CallbackStop
+        outdata[:, 0] = chunk
+        frames_played += frames
+
+    print("Playing audio...")
+    stream = sd.OutputStream(samplerate=SAMPLE_RATE, channels=1, callback=audio_callback)
+    stream.start()
+
+    def update(frame):
+        audio_elapsed = (frames_played / SAMPLE_RATE) * speed_factor
+        cursor_line.set_xdata([audio_elapsed, audio_elapsed])
+        if audio_elapsed > stretch_times[-1]:
+            ani.event_source.stop()
+        return cursor_line,
+
+    ani = animation.FuncAnimation(fig, update, interval=30, blit=True)
+    plt.show()
