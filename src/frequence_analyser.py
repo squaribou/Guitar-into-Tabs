@@ -3,7 +3,6 @@ import matplotlib.pyplot as plt
 from scipy.fft import fft, fftfreq
 from scipy.signal import find_peaks
 
-from basics import loading_audio_file
 from constants import *
 
 def get_fft(audio):
@@ -19,7 +18,9 @@ def get_fft(audio):
 
 def plot_fft(file_path):
     """Plot the fft of an andio"""
-    audio = loading_audio_file(file_path)
+    print("Loading audio file...")
+    audio, _ = librosa.load(file_path, sr=SAMPLE_RATE)
+    print("Audio file loaded.")
 
     _, axes = plt.subplots(2, 1, figsize=(10, 8))
     times = np.arange(len(audio)) / SAMPLE_RATE

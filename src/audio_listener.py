@@ -6,7 +6,7 @@ import matplotlib.animation as animation
 import sounddevice as sd
 
 from constants import *
-from basics import loading_audio_file, predict_from_array, extract_note_attacks
+from basics import predict_from_array, extract_note_attacks
 
 
 def listen_audio(file_path, starting_time_in_seconds=0, duration_in_seconds=None, speed_factor=1):
@@ -15,7 +15,9 @@ def listen_audio(file_path, starting_time_in_seconds=0, duration_in_seconds=None
     we can see a cursor indicate us at which time we are and the note attacks
     """
 
-    audio = loading_audio_file(file_path, starting_time_in_seconds, duration_in_seconds)
+    print("Loading audio file...")
+    audio, _ = librosa.load(file_path, sr=SAMPLE_RATE, offset=starting_time_in_seconds, duration=duration_in_seconds)
+    print("Audio file loaded.")
     audio_stretched = librosa.effects.time_stretch(audio, rate=speed_factor)
     model_output, _, _ = predict_from_array(audio)
     attacks = extract_note_attacks(model_output["onset"])

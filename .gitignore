@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 .vscode/
 .venv/
+*.mp3
+*.wav
+*.xml
