@@ -4,11 +4,13 @@ import logging
 
 logging.getLogger("root").setLevel(logging.ERROR)
 
-from constants import *
-from basics import predict_from_array, extract_note_attacks, filter_chord_notes, stupid_filter, estimate_tempo_from_attacks, assign_note_durations
+from constants import SAMPLE_RATE, MAX_TEMPO_BPM
+from basics import predict_from_array, analysis, extract_note_attacks, group_by_measure
 from frequence_analyser import get_fft, top_2_fundamental_frequencies
 from audio_listener import listen_audio
 from music_sheet_writter import create_music_sheet, display_music_sheet
+from tempo import view_tempo_drift, assign_note_position, assign_note_durations, estimate_tempo_from_attacks, correct_notes_from_true_error
+from note_filter import filter_chord_notes, stupid_filter
 
 
 def get_note_fft(file_path, starting_time_in_seconds, start_time, end_time):
@@ -32,67 +34,80 @@ def get_note_fft(file_path, starting_time_in_seconds, start_time, end_time):
     plt.show()
 
 
-def analysis(file_path, start_time=0, end_time=None):
-    print("Loading audio file...")
-    audio, _ = librosa.load(file_path, sr=SAMPLE_RATE)
-    print("Audio file loaded.")
-    model_output, _, _ = predict_from_array(audio)
+def main(file_path, starting_time_in_seconds=0, duration_in_seconds=None, capo=0):
+    """Main function of the project"""
 
-    print("Prepare plotting...")
-    start_frame = int(start_time / FRAME_TIME)
-    end_frame = int(end_time / FRAME_TIME)
-
-    _, axes = plt.subplots(2, 1, figsize=(10, 5))
-    axes[0].imshow(model_output["onset"].T, aspect="auto", origin="lower")
-    axes[0].set_title("Probabilités d'onset")
-    axes[0].set_ylim(top=60, bottom=20)
-    axes[0].set_xlim(left=start_frame, right=end_frame)
-
-    axes[1].imshow(model_output["note"].T, aspect="auto", origin="lower")
-    axes[1].set_title("Probabilités de note")
-    axes[1].set_ylim(top=60, bottom=20)
-    axes[1].set_xlim(left=start_frame, right=end_frame)
-
-    # axes[2].imshow(model_output["contour"].T, aspect="auto", origin="lower")
-    # axes[2].set_title("Probabilités de contour")
-    # axes[2].set_ylim(top=60, bottom=20)
-    # axes[2].set_xlim(left=start_frame, right=end_frame)
-
-    print("Window displayed.")
-    plt.show()
-
-
-def processing_notes(file_path, starting_time_in_seconds=0, duration_in_seconds=None, capo=0):
     print("Loading audio file...")
     audio, _ = librosa.load(file_path, sr=SAMPLE_RATE, offset=starting_time_in_seconds, duration=duration_in_seconds)
     print("Audio file loaded.")
     model_output, _, _ = predict_from_array(audio)
-
     attacks = extract_note_attacks(model_output["onset"])
-    tempo_bpm, confidence = estimate_tempo_from_attacks([t for t, _ in attacks])
+
+
+    # ___Basic filtering of harmonics and ghost notes___
+    filtered_attacks = []
+    for t, pitches in attacks:
+        pitches = filter_chord_notes(pitches)
+        pitches = stupid_filter(pitches)
+        filtered_attacks.append((t, pitches))
+
+
+    # ___Getting tempo___
+    tempo_bpm, confidence = estimate_tempo_from_attacks([t for t, _ in filtered_attacks])
     while tempo_bpm > MAX_TEMPO_BPM:
         tempo_bpm/= 2
-    print(tempo_bpm, confidence)
-    attacks_with_duration = assign_note_durations(attacks, tempo_bpm)
+    print(f"BPM found : {tempo_bpm} ({confidence:.2f})")
 
-    note_list = []
-    for t, pitches, quaterlenght in attacks_with_duration:
-        chords = filter_chord_notes(pitches)
-        notes_str = ", ".join(f"{librosa.midi_to_note(int(midi))} ({confidence:.2f})" for midi, confidence in chords)
-        # print(f"{t:.2f}s {quaterlenght}-> {notes_str}")
 
-        chords_v2 = stupid_filter(chords)
-        note_list.append(([int(midi) - capo for midi, _ in chords_v2], quaterlenght))
+    # ___Positionning with correction of the notes___
+    raw_positionned_notes  = assign_note_position(filtered_attacks, tempo_bpm)
+    # view_tempo_drift(raw_positionned_notes)
+    positionned_notes = correct_notes_from_true_error(raw_positionned_notes)
+    # analysis(model_output, attacks, raw_positionned_notes, tempo_bpm, start_time=30, end_time=45)
+    # analysis(model_output, attacks, positionned, tempo_bpm, start_time=30, end_time=45)
 
-    music_sheet = create_music_sheet(note_list, int(tempo_bpm))
-    display_music_sheet(music_sheet)
+
+    # ___Sepration between melodie voice and low voice___
+    melodie_voice = []
+    low_voice = []
+    for pitches, quarter_position_in_measure, measure_position, min_d in positionned_notes:
+        note_basse = None
+        for midi, _ in pitches:
+            if midi < 60:
+                low_voice.append(([int(midi) - capo], quarter_position_in_measure, measure_position, min_d))
+                note_basse = midi
+                break
+        if len(pitches) == 1 and pitches[0][0] == note_basse:
+            continue
+        melodie_voice.append(([int(midi) - capo for midi, _ in pitches if midi != note_basse], quarter_position_in_measure, measure_position, min_d))
+
+    # view_tempo_drift(low_voice)
+    # view_tempo_drift(melodie_voice)
+    simplified_melodie_voice = [(pitches, quarter_position_in_measure, measure_position) for pitches, quarter_position_in_measure, measure_position, _ in melodie_voice]
+    simplified_low_voice = [(pitches, quarter_position_in_measure, measure_position) for pitches, quarter_position_in_measure, measure_position, _ in low_voice]
+
+
+    melodie_voice_with_duration = assign_note_durations(simplified_melodie_voice)
+    low_voice_with_duration = assign_note_durations(simplified_low_voice)
+
+
+    # ___Prepare the voices for the score___
+    melodie_voice_in_measure = group_by_measure(melodie_voice_with_duration)
+    low_voice_in_measure = group_by_measure(low_voice_with_duration)
+
+
+    score = create_music_sheet(melodie_voice_in_measure, low_voice_in_measure, int(tempo_bpm))
+    display_music_sheet(score)
+
     return
 
 
 if __name__ == "__main__":
-    # file_path = "audio_files/Howls moving castle (Merry-Go-Round of Life).mp3"
-    file_path = "audio_files/Undertale_fixed.wav"
-    # note_fft(2.1,  0.95, 1.10  )
-    processing_notes(file_path, starting_time_in_seconds=0, duration_in_seconds=49, capo=2)
-    # analysis(file_path, start_time=5, end_time=30)
-    # listen_audio(file_path,starting_time_in_seconds=20, duration_in_seconds=40, speed_factor = 0.7)
+    try:
+        # file_path = "audio_files/Howls moving castle (Merry-Go-Round of Life).mp3"
+        file_path = "audio_files/Undertale_fixed.wav" # Music basic et simple
+        # note_fft(2.1,  0.95, 1.10  )
+        main(file_path, starting_time_in_seconds=0, duration_in_seconds=49, capo=2)
+        # listen_audio(file_path,starting_time_in_seconds=20, duration_in_seconds=40, speed_factor = 0.7)
+    except Exception as e:
+        print(f"An error occurred: {e}")

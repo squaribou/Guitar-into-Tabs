@@ -35,6 +35,7 @@ MAX_TEMPO_BPM = 150
 
 # Music sheet parameters
 MUSESCORE_PATH = "C:/Program Files/MuseScore 4/bin/MuseScore4.exe"
+TIME_SIGNATURE = 4 # beats per measure
 STANDARD_DURATIONS = [
     4.0, # whole note
     3.0, # dotted half note
@@ -46,4 +47,6 @@ STANDARD_DURATIONS = [
     0.25, # sixteenth note
     0.125, # thirty-second note
 ]
-KEY_SIGNATURE_RANGE = range(0, 8) # only sharps
+SMALLEST_STEP = 0.25
+STANDARD_POSITIONS = [i * SMALLEST_STEP for i in range(TIME_SIGNATURE * int(1/SMALLEST_STEP))]
+KEY_SIGNATURE_RANGE = range(0, 8) # only sharps with positive values

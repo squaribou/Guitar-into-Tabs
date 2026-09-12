@@ -1,21 +1,21 @@
-from music21 import stream, tempo, note, chord, clef, key, meter
+from music21 import stream, tempo, note, chord, clef, key, meter, instrument, interval
 import subprocess
 import logging
 
-from constants import KEY_SIGNATURE_RANGE, MUSESCORE_PATH
+from constants import KEY_SIGNATURE_RANGE, MUSESCORE_PATH, TIME_SIGNATURE
 
 logging.basicConfig(filename="debug.log", level=logging.DEBUG)
 
-def _force_sharp_spelling(music_sheet: stream.Stream)->stream.Stream:
+def _force_sharp_spelling(score: stream.Stream)->stream.Stream:
     """Forces all altered notes to be written as sharps, never as flats."""
-    for element in music_sheet.recurse().notes:
+    for element in score.recurse().notes:
         pitches_to_check = element.pitches if hasattr(element, 'pitches') else [element.pitch]
         
         for p in pitches_to_check:
             if p.accidental is not None and p.accidental.name == 'flat':
                 p.getEnharmonic(inPlace=True)
     
-    return music_sheet
+    return score
 
 
 def _count_accidentals_needed(all_pitches: list, key_signature: int)->int:
@@ -38,13 +38,13 @@ def _count_accidentals_needed(all_pitches: list, key_signature: int)->int:
     return count
 
 
-def _find_best_key_signature(music_sheet: stream.Stream, key_signature_range=KEY_SIGNATURE_RANGE)->int:
+def _find_best_key_signature(score: stream.Stream, key_signature_range=KEY_SIGNATURE_RANGE)->int:
     """
     Find the key signature (among key_signature_range) that minimizes the number 
     of accidental alterations required in the music sheet.
     """
     all_pitches = []
-    for element in music_sheet.recurse().notes:
+    for element in score.recurse().notes:
         pitches = element.pitches if hasattr(element, 'pitches') else [element.pitch]
         all_pitches.extend(pitches)
     
@@ -60,29 +60,55 @@ def _find_best_key_signature(music_sheet: stream.Stream, key_signature_range=KEY
     return best_sharps
 
 
-def create_music_sheet(pitches_in_midi: list, tempo_bpm: int)->stream.Stream:
+def create_music_sheet(voix_melodie_notes: list, voix_basse_notes: list, tempo_bpm: int)->stream.Stream:
     """Create a music_sheet"""
-    music_sheet = stream.Stream()
-    music_sheet.append(tempo.MetronomeMark(number=tempo_bpm))
-    music_sheet.append(clef.Treble8vbClef())
-    for pitch_in_midi, quaterlenght in pitches_in_midi:
-        if len(pitch_in_midi) == 1:
-            music_sheet.append(note.Note(midi=pitch_in_midi[0], quarterLength=quaterlenght))
-        else:
-            music_sheet.append(chord.Chord(pitch_in_midi, quarterLength=quaterlenght))
 
-    _force_sharp_spelling(music_sheet)
-    best_key_signature = _find_best_key_signature(music_sheet)
-    music_sheet.insert(0, key.KeySignature(best_key_signature))
-    music_sheet.append(meter.TimeSignature('4/4'))
-    return music_sheet
+    score = stream.Stream()
+    score.append(clef.Treble8vbClef())
+    score.append(meter.TimeSignature(f"{TIME_SIGNATURE}/4"))
+
+    nb_measure = max(len(voix_melodie_notes), len(voix_basse_notes))
+    for i in range(nb_measure):
+        try:
+            measure = stream.Measure()
+            if i == 0:
+                measure.insert(0, tempo.MetronomeMark(number=tempo_bpm))
+            voix_melodie = stream.Voice()
+            voix_basse = stream.Voice()
+            for pitches_in_midi, quarter_position_in_measure, quarter_length in voix_melodie_notes[i]:
+                if quarter_length == 0:
+                    quarter_length = 0.125
+                if len(pitches_in_midi) == 1:
+                    voix_melodie.insert(quarter_position_in_measure, note.Note(midi=pitches_in_midi[0], quarterLength=quarter_length))
+                else:
+                    voix_melodie.insert(quarter_position_in_measure, chord.Chord(pitches_in_midi, quarterLength=quarter_length))
+            for pitches_in_midi, quarter_position_in_measure, quarter_length in voix_basse_notes[i]:
+                voix_basse.insert(quarter_position_in_measure, note.Note(midi=pitches_in_midi[0], quarterLength=quarter_length))
+
+            measure.insert(0, voix_melodie)
+            measure.insert(0, voix_basse)
+            score.append(measure)
+        except IndexError:
+            print(f"error at measure {i}")
+            break
+
+    try:
+        _force_sharp_spelling(score)
+        best_key_signature = _find_best_key_signature(score)
+        score.insert(0, key.KeySignature(best_key_signature))
+    except Exception as e:
+        print(f"Error occurred while processing key signature: {e}")
+    return score
 
 
-def display_music_sheet(music_sheet: stream.Stream)->None:
+def display_music_sheet(score: stream.Stream)->None:
     """Save and display the music_sheet in Musescore"""
-    output_path = "music_sheets/my_music_sheet.xml"
-    music_sheet.write("musicxml", fp=output_path)
-    print(f"XML written to {output_path}")
+    try:
+        output_path = "music_sheets/my_music_sheet.xml"
+        score.write("musicxml", fp=output_path)
+        print(f"XML written to {output_path}")
 
-    subprocess.Popen([MUSESCORE_PATH, output_path])
-    print("Partition opened")
+        subprocess.Popen([MUSESCORE_PATH, output_path])
+        print("Partition opened")
+    except Exception as e:
+        print(f"Error occurred while displaying music sheet: {e}")
