@@ -164,7 +164,7 @@ def assign_note_durations(notes, default_last_duration=1.0):
     for i, (pitches, quarter_position_in_measure, measure) in enumerate(notes):
         if i < n - 1:
             next_t = notes[i + 1][1] + notes[i + 1][2] * 4
-            quarter_length = min(next_t - (measure * 4 + quarter_position_in_measure), 4)
+            quarter_length = next_t - (measure * 4 + quarter_position_in_measure)
         else:
             quarter_length = default_last_duration
 
