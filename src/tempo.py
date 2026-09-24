@@ -2,8 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import linregress
 
-from constants import (BPM_RANGE, PERIODE_RESOLUTION, TOLERANCE, MIN_IOI,
-                       STANDARD_POSITIONS, TIME_SIGNATURE, SMALLEST_STEP)
+from constants import *
 
 def estimate_tempo_from_attacks(filtered_attack_times, bpm_range=BPM_RANGE, period_resolution=PERIODE_RESOLUTION, tolerance=TOLERANCE, min_ioi=MIN_IOI):
     """
@@ -49,7 +48,7 @@ def estimate_tempo_from_attacks(filtered_attack_times, bpm_range=BPM_RANGE, peri
     return round(tempo_bpm, 2), round(confidence, 3)
 
 
-def assign_note_position(filtered_attacks, tempo_bpm, allowed_positions=STANDARD_POSITIONS, beats_per_measure=TIME_SIGNATURE):
+def assign_note_position(filtered_attacks, tempo_bpm, allowed_positions=STANDARD_POSITIONS, beats_per_measure=BEATS_PER_MESURE):
     """
     Locating and assigning the position closest to the note based on the detected tempo, while saving the perceived error.
     filtered_attacks : list of (t, pitches)
@@ -85,7 +84,7 @@ def assign_note_position(filtered_attacks, tempo_bpm, allowed_positions=STANDARD
     return raw_positionned_notes
 
 
-def correct_notes_from_true_error(raw_positionned_notes, smallest_step=SMALLEST_STEP, beats_per_measure=TIME_SIGNATURE):
+def correct_notes_from_true_error(raw_positionned_notes, smallest_step=SMALLEST_STEP, beats_per_measure=BEATS_PER_MESURE):
     """
     Corrects the theoretical note positions based on the "true" error (continuous drift, unwrapped), regardless of the number of
     SMALLEST_STEP increments exceeded.
@@ -169,5 +168,70 @@ def assign_note_durations(notes, default_last_duration=1.0):
             quarter_length = default_last_duration
 
         results.append((pitches, quarter_position_in_measure, measure, quarter_length))
+
+    return results
+
+
+def extract_attacks_duration(notes, prob_matrix, frame_time=FRAME_TIME, midi_offset=MIDI_OFFSET,
+                           threshold=0.3, hysteresis_frames=3, min_duration_frames=1):
+    """
+    notes : list of (t, pitches) 
+        pitches : list of (pitch_midi, confidence)
+    prob_matrix : array (n_frames, n_pitches)
+
+    active_threshold_ratio : fraction de la confidence à l'onset en dessous de laquelle
+        on considère la note "éteinte"
+    hysteresis_frames : nb de frames consécutives sous le seuil avant de couper
+        (évite de couper sur un creux ponctuel/bruit)
+    min_duration_frames : durée minimale plancher, en frames (évite les durées ~0)
+
+    Retourne : list of (t, [(pitch, confidence, duration_seconds), ...])
+    """
+    n_frames, n_pitches = prob_matrix.shape
+
+    # Regrouper les frames d'onset par pitch, pour pouvoir borner
+    # la recherche par "prochain onset sur cette même hauteur"
+    pitch_onset_frames = {}
+    for t, pitches in notes:
+        frame_idx = int(round(t / frame_time))
+        for pitch, conf in pitches:
+            pitch_onset_frames.setdefault(pitch, []).append(frame_idx)
+    for pitch in pitch_onset_frames:
+        pitch_onset_frames[pitch].sort()
+
+    results = []
+    for t, pitches in notes:
+        onset_frame = int(round(t / frame_time))
+        note_results = []
+
+        for pitch, conf in pitches:
+            column = pitch - midi_offset
+            if not (0 <= column < n_pitches):
+                continue
+
+            # borne haute : le prochain onset sur la même hauteur (legato/notes répétées)
+            same_pitch_onsets = pitch_onset_frames.get(pitch, [])
+            next_onset_frame = next(
+                (f for f in same_pitch_onsets if f > onset_frame), n_frames
+            )
+
+            last_active_frame = onset_frame
+            below_streak = 0
+
+            for frame in range(onset_frame, next_onset_frame):
+                if prob_matrix[frame, column] >= threshold:
+                    last_active_frame = frame
+                    below_streak = 0
+                else:
+                    below_streak += 1
+                    if below_streak >= hysteresis_frames:
+                        break
+
+            duration_frames = max(last_active_frame - onset_frame + 1, min_duration_frames)
+            duration = duration_frames * frame_time
+
+            note_results.append((pitch, conf, duration))
+
+        results.append((t, note_results))
 
     return results

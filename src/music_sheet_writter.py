@@ -2,7 +2,7 @@ from music21 import stream, tempo, note, chord, clef, key, meter, tie
 import subprocess
 import logging
 
-from constants import KEY_SIGNATURE_RANGE, MUSESCORE_PATH, TIME_SIGNATURE
+from constants import KEY_SIGNATURE_RANGE, MUSESCORE_PATH, BEATS_PER_MESURE
 
 logging.basicConfig(filename="debug.log", level=logging.DEBUG)
 
@@ -60,21 +60,23 @@ def _find_best_key_signature(score: stream.Stream, key_signature_range=KEY_SIGNA
     return best_sharps
 
 
-def create_music_sheet(voix_melodie_notes: list, voix_basse_notes: list, tempo_bpm: int, beats_per_measure=TIME_SIGNATURE) -> stream.Stream:
+def create_music_sheet(melody_voice_in_measure: list, low_voice_in_measure: list, tempo_bpm: int, beats_per_measure=BEATS_PER_MESURE) -> stream.Stream:
     """Create a music_sheet"""
 
     score = stream.Stream()
     score.append(clef.Treble8vbClef())
     score.append(meter.TimeSignature(f"{beats_per_measure}/4"))
 
-    nb_measure = min(len(voix_melodie_notes), len(voix_basse_notes))
+    nb_measure = max(len(melody_voice_in_measure), len(low_voice_in_measure))
+    melody_voice_in_measure.extend([[] for _ in range(nb_measure-len(melody_voice_in_measure))])
+    low_voice_in_measure.extend([[] for _ in range(nb_measure-len(low_voice_in_measure))])
     pending_bass_tie = None
 
     for i in range(nb_measure):
         try:
             measure = stream.Measure()
-            voix_melodie = stream.Voice()
-            voix_basse = stream.Voice()
+            melody_voice = stream.Voice()
+            low_voice = stream.Voice()
 
             # ___Add tempo to the first measure___ (temporary if the music have a tempo change)
             if i == 0:
@@ -99,19 +101,19 @@ def create_music_sheet(voix_melodie_notes: list, voix_basse_notes: list, tempo_b
                     n.tie = tie.Tie("stop")
                     pending_bass_tie = None
 
-                voix_basse.insert(0, n)
+                low_voice.insert(0, n)
 
             # ___Add the melodie___ 
-            for pitches_in_midi, quarter_position_in_measure, quarter_length in voix_melodie_notes[i]:
+            for pitches_in_midi, quarter_position_in_measure, quarter_length in melody_voice_in_measure[i]:
                 if quarter_length == 0:
                     ValueError("Quaterlength cannot be 0")
                 if len(pitches_in_midi) == 1:
-                    voix_melodie.insert(quarter_position_in_measure, note.Note(midi=pitches_in_midi[0], quarterLength=quarter_length))
+                    melody_voice.insert(quarter_position_in_measure, note.Note(midi=pitches_in_midi[0], quarterLength=quarter_length))
                 else:
-                    voix_melodie.insert(quarter_position_in_measure, chord.Chord(pitches_in_midi, quarterLength=quarter_length))
+                    melody_voice.insert(quarter_position_in_measure, chord.Chord(pitches_in_midi, quarterLength=quarter_length))
 
             # ___Add low note and cut it if exceed a measure___
-            for pitches_in_midi, quarter_position_in_measure, quarter_length in voix_basse_notes[i]:
+            for pitches_in_midi, quarter_position_in_measure, quarter_length in low_voice_in_measure[i]:
                 space_left = beats_per_measure - quarter_position_in_measure
 
                 if quarter_length == 0:
@@ -124,7 +126,7 @@ def create_music_sheet(voix_melodie_notes: list, voix_basse_notes: list, tempo_b
                     else:
                         n = chord.Chord(pitches_in_midi, quarterLength=length_here)
                     n.tie = tie.Tie("start")
-                    voix_basse.insert(quarter_position_in_measure, n)
+                    low_voice.insert(quarter_position_in_measure, n)
 
                     pending_bass_tie = {
                         "pitches": pitches_in_midi,
@@ -132,12 +134,12 @@ def create_music_sheet(voix_melodie_notes: list, voix_basse_notes: list, tempo_b
                     }
                 else:
                     if len(pitches_in_midi) == 1:
-                        voix_basse.insert(quarter_position_in_measure, note.Note(midi=pitches_in_midi[0], quarterLength=quarter_length))
+                        low_voice.insert(quarter_position_in_measure, note.Note(midi=pitches_in_midi[0], quarterLength=quarter_length))
                     else:
-                        voix_basse.insert(quarter_position_in_measure, chord.Chord(pitches_in_midi, quarterLength=quarter_length))
+                        low_voice.insert(quarter_position_in_measure, chord.Chord(pitches_in_midi, quarterLength=quarter_length))
 
-            measure.insert(0, voix_melodie)
-            measure.insert(0, voix_basse)
+            measure.insert(0, melody_voice)
+            measure.insert(0, low_voice)
             score.append(measure)
 
         except Exception as e:

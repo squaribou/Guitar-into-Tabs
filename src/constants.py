@@ -31,11 +31,14 @@ MIN_IOI = 0.05
 TOLERANCE = 0.10
 PERIODE_RESOLUTION = 0.005
 BPM_RANGE = (40, 300)
-MAX_TEMPO_BPM = 150
+MAX_TEMPO_BPM = 100
+
+# Voice separator parameters
+LOWEST_MELODY_NOTE = 55 # G3 in midi
 
 # Music sheet parameters
 MUSESCORE_PATH = "C:/Program Files/MuseScore 4/bin/MuseScore4.exe"
-TIME_SIGNATURE = 4 # beats per measure
+BEATS_PER_MESURE = 4
 STANDARD_DURATIONS = [
     4.0, # whole note
     3.0, # dotted half note
@@ -48,5 +51,5 @@ STANDARD_DURATIONS = [
     0.125, # thirty-second note
 ]
 SMALLEST_STEP = 0.25
-STANDARD_POSITIONS = [i * SMALLEST_STEP for i in range(TIME_SIGNATURE * int(1/SMALLEST_STEP))]
+STANDARD_POSITIONS = [i * SMALLEST_STEP for i in range(BEATS_PER_MESURE * int(1/SMALLEST_STEP))]
 KEY_SIGNATURE_RANGE = range(0, 8) # only sharps with positive values
