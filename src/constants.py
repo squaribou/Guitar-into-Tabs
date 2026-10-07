@@ -40,6 +40,7 @@ LOWEST_MELODY_NOTE = 55 # G3 in midi
 MUSESCORE_PATH = "C:/Program Files/MuseScore 4/bin/MuseScore4.exe"
 BEATS_PER_MESURE = 4
 STANDARD_DURATIONS = [
+    8.0, # double whole note
     4.0, # whole note
     3.0, # dotted half note
     2.0, # half note
@@ -48,7 +49,6 @@ STANDARD_DURATIONS = [
     0.75, # dotted eighth note
     0.5, # eighth note
     0.25, # sixteenth note
-    0.125, # thirty-second note
 ]
 SMALLEST_STEP = 0.25
 STANDARD_POSITIONS = [i * SMALLEST_STEP for i in range(BEATS_PER_MESURE * int(1/SMALLEST_STEP))]

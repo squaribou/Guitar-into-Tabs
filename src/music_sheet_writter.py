@@ -1,4 +1,5 @@
-from music21 import stream, tempo, note, chord, clef, key, meter, tie
+from music21 import stream, tempo, note, chord, clef, key, meter, tie, beam
+import math
 import subprocess
 import logging
 
@@ -60,6 +61,116 @@ def _find_best_key_signature(score: stream.Stream, key_signature_range=KEY_SIGNA
     return best_sharps
 
 
+def _duration_type_and_count(quarter_length):
+    """Retourne le type music21 et le nombre de barres de ligature pour une durée donnée."""
+    if quarter_length >= 1.0:
+        return None, 0
+    elif quarter_length >= 0.5:
+        return 'eighth', 1
+    elif quarter_length >= 0.25:
+        return '16th', 2
+    elif quarter_length >= 0.125:
+        return '32nd', 3
+    else:
+        return '64th', 4
+
+
+def _apply_manual_beams(voice: stream.Voice, beats_per_measure: int):
+    """
+    Applique des ligatures manuelles aux croches (et plus courtes) consécutives
+    à l'intérieur d'un même temps, pour contourner le beaming automatique
+    parfois incorrect de music21 (notamment avec des Voice multiples).
+    """
+    elements = list(voice.notesAndRests)
+    beat_groups = {}
+
+    for el in elements:
+        if isinstance(el, note.Rest):
+            continue  # un silence casse toujours la ligature
+        beat_index = int(el.offset)  # 1 noire = 1 temps, donc int(offset) = numéro du temps
+        beat_groups.setdefault(beat_index, []).append(el)
+
+    for group in beat_groups.values():
+        beamable = [el for el in group if el.quarterLength < 1.0]
+        if len(beamable) < 2:
+            continue  # il faut au moins 2 notes pour ligaturer
+
+        for idx, el in enumerate(beamable):
+            dur_type, _ = _duration_type_and_count(el.quarterLength)
+            if dur_type is None:
+                continue
+
+            el.beams = beam.Beams()
+            if idx == 0:
+                beam_type = 'start'
+            elif idx == len(beamable) - 1:
+                beam_type = 'stop'
+            else:
+                beam_type = 'continue'
+
+            el.beams.fill(dur_type, type=beam_type)
+
+
+def _split_at_beats(voice: stream.Voice):
+    """Coupe (avec liaison) les notes < 1 temps qui commencent entre deux temps
+    et enjambent le temps suivant."""
+    for el in list(voice.notesAndRests):
+        if el.quarterLength >= 1.0:
+            continue
+        start = el.offset
+        end = start + el.quarterLength
+        next_beat = math.floor(start + 1e-6) + 1
+        starts_off_beat = (start % 1) > 1e-6
+        if starts_off_beat and end > next_beat + 1e-6:
+            first, second = el.splitAtQuarterLength(next_beat - start)
+            voice.remove(el)
+            voice.insert(start, first)
+            voice.insert(next_beat, second)
+
+
+def _make_element(pitches, length):
+    if len(pitches) == 1:
+        return note.Note(midi=pitches[0], quarterLength=length)
+    return chord.Chord(pitches, quarterLength=length)
+
+
+def _fill_voice(voice, notes_in_measure, pending, beats_per_measure):
+    """
+    Remplit une Voice : insère d'abord la continuation d'une note liée venant de la
+    mesure précédente, puis les notes de la mesure, en coupant celles qui dépassent
+    la barre de mesure. Retourne le report éventuel pour la mesure suivante.
+    """
+    new_pending = None
+
+    # Continuation de la mesure précédente
+    if pending is not None:
+        length_here = min(pending["remaining"], beats_per_measure)
+        el = _make_element(pending["pitches"], length_here)
+        remaining = pending["remaining"] - length_here
+        if remaining > 1e-6:
+            el.tie = tie.Tie("continue")
+            new_pending = {"pitches": pending["pitches"], "remaining": remaining}
+        else:
+            el.tie = tie.Tie("stop")
+        voice.insert(0, el)
+
+    # Notes de la mesure
+    for pitches, position, quarter_length in notes_in_measure:
+        if quarter_length <= 0:
+            raise ValueError("Quarterlength cannot be 0")
+        space_left = beats_per_measure - position
+
+        if quarter_length > space_left + 1e-6:
+            el = _make_element(pitches, space_left)
+            el.tie = tie.Tie("start")
+            voice.insert(position, el)
+            new_pending = {"pitches": pitches, "remaining": quarter_length - space_left}
+        else:
+            voice.insert(position, _make_element(pitches, quarter_length))
+
+    return new_pending
+
+
 def create_music_sheet(melody_voice_in_measure: list, low_voice_in_measure: list, tempo_bpm: int, beats_per_measure=BEATS_PER_MESURE) -> stream.Stream:
     """Create a music_sheet"""
 
@@ -68,8 +179,10 @@ def create_music_sheet(melody_voice_in_measure: list, low_voice_in_measure: list
     score.append(meter.TimeSignature(f"{beats_per_measure}/4"))
 
     nb_measure = max(len(melody_voice_in_measure), len(low_voice_in_measure))
-    melody_voice_in_measure.extend([[] for _ in range(nb_measure-len(melody_voice_in_measure))])
-    low_voice_in_measure.extend([[] for _ in range(nb_measure-len(low_voice_in_measure))])
+    melody_voice_in_measure.extend([[] for _ in range(nb_measure - len(melody_voice_in_measure))])
+    low_voice_in_measure.extend([[] for _ in range(nb_measure - len(low_voice_in_measure))])
+
+    pending_melody_tie = None
     pending_bass_tie = None
 
     for i in range(nb_measure):
@@ -78,66 +191,32 @@ def create_music_sheet(melody_voice_in_measure: list, low_voice_in_measure: list
             melody_voice = stream.Voice()
             low_voice = stream.Voice()
 
-            # ___Add tempo to the first measure___ (temporary if the music have a tempo change)
             if i == 0:
                 measure.insert(0, tempo.MetronomeMark(number=tempo_bpm))
 
-            # ___Add the low tie note___
-            if pending_bass_tie is not None:
-                pitches = pending_bass_tie["pitches"]
-                remaining = pending_bass_tie["remaining"]
-                length_here = min(remaining, beats_per_measure)
-
-                if len(pitches) == 1:
-                    n = note.Note(midi=pitches[0], quarterLength=length_here)
+            # ___Silence manuel si la mélodie ne commence pas à 0___
+            # (inutile si une note liée de la mesure précédente occupe déjà le début)
+            if pending_melody_tie is None and low_voice_in_measure[i]:
+                if melody_voice_in_measure[i]:
+                    first_melodie_position = melody_voice_in_measure[i][0][1]
                 else:
-                    n = chord.Chord(pitches, quarterLength=length_here)
+                    first_melodie_position = beats_per_measure
+                if first_melodie_position > 0:
+                    rest_duration = min(first_melodie_position, beats_per_measure)
+                    melody_voice.insert(0, note.Rest(quarterLength=rest_duration))
 
-                remaining -= length_here
-                if remaining > 1e-6:
-                    n.tie = tie.Tie("continue")
-                    pending_bass_tie = {"pitches": pitches, "remaining": remaining}
-                else:
-                    n.tie = tie.Tie("stop")
-                    pending_bass_tie = None
+            # ___Remplissage des deux voix (avec ties entre mesures)___
+            pending_melody_tie = _fill_voice(melody_voice, melody_voice_in_measure[i],
+                                             pending_melody_tie, beats_per_measure)
+            pending_bass_tie = _fill_voice(low_voice, low_voice_in_measure[i],
+                                           pending_bass_tie, beats_per_measure)
 
-                low_voice.insert(0, n)
+            # ___Ligatures (après le découpage à la barre de mesure)___
+            _split_at_beats(melody_voice)
+            _apply_manual_beams(melody_voice, beats_per_measure)
 
-            # ___Add the melodie___ 
-            for pitches_in_midi, quarter_position_in_measure, quarter_length in melody_voice_in_measure[i]:
-                if quarter_length == 0:
-                    ValueError("Quaterlength cannot be 0")
-                if len(pitches_in_midi) == 1:
-                    melody_voice.insert(quarter_position_in_measure, note.Note(midi=pitches_in_midi[0], quarterLength=quarter_length))
-                else:
-                    melody_voice.insert(quarter_position_in_measure, chord.Chord(pitches_in_midi, quarterLength=quarter_length))
-
-            # ___Add low note and cut it if exceed a measure___
-            for pitches_in_midi, quarter_position_in_measure, quarter_length in low_voice_in_measure[i]:
-                space_left = beats_per_measure - quarter_position_in_measure
-
-                if quarter_length == 0:
-                    ValueError("Quaterlength cannot be 0")
-
-                if quarter_length > space_left + 1e-6:
-                    length_here = space_left
-                    if len(pitches_in_midi) == 1:
-                        n = note.Note(midi=pitches_in_midi[0], quarterLength=length_here)
-                    else:
-                        n = chord.Chord(pitches_in_midi, quarterLength=length_here)
-                    n.tie = tie.Tie("start")
-                    low_voice.insert(quarter_position_in_measure, n)
-
-                    pending_bass_tie = {
-                        "pitches": pitches_in_midi,
-                        "remaining": quarter_length - length_here
-                    }
-                else:
-                    if len(pitches_in_midi) == 1:
-                        low_voice.insert(quarter_position_in_measure, note.Note(midi=pitches_in_midi[0], quarterLength=quarter_length))
-                    else:
-                        low_voice.insert(quarter_position_in_measure, chord.Chord(pitches_in_midi, quarterLength=quarter_length))
-
+            print(i, "mélodie:", melody_voice.highestTime, "basse:", low_voice.highestTime,
+                  "attendu:", beats_per_measure)
             measure.insert(0, melody_voice)
             measure.insert(0, low_voice)
             score.append(measure)

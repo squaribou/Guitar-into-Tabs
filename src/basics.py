@@ -26,34 +26,46 @@ def predict_from_array(audio):
 def analysis(model_output, note_df, tempo_bpm, start_time=0, end_time=None, beats_per_measure=BEATS_PER_MESURE):
     """
     Heatmap to visually diagnose where and why the model generates false positives, showing estimated, 
-    positioned, and/or corrected note locations.
+    positioned, and/or corrected note locations (starts and ends).
 
     note_df : DataFrame avec colonnes onset_frame, onset_time, pitch, confidence, duration,
-        quarter_position_in_measure, measure_position, error
+        quarter_position_in_measure, measure_position, error, quarter_length
     """
 
     print("Prepare plotting...")
     start_frame = int(start_time / FRAME_TIME)
     end_frame = int(end_time / FRAME_TIME)
 
-    # --- points rouges : onsets bruts ---
-    attack_frame_idx = note_df["onset_time"] / FRAME_TIME
-    mask = (attack_frame_idx >= start_frame) & (attack_frame_idx <= end_frame)
-    attack_frames = attack_frame_idx[mask].tolist()
-    attack_pitches = (note_df.loc[mask, "pitch"] - MIDI_OFFSET).tolist()
+    def frames_pitches(frame_idx_series, pitch_mask_source):
+        mask = (frame_idx_series >= start_frame) & (frame_idx_series <= end_frame)
+        frames = frame_idx_series[mask].tolist()
+        pitches = (pitch_mask_source.loc[mask] - MIDI_OFFSET).tolist()
+        return frames, pitches
 
-    # --- points jaunes : notes positionnées/corrigées ---
+    # --- points rouges : débuts d'onset bruts ---
+    attack_frame_idx = note_df["onset_time"] / FRAME_TIME
+    attack_frames, attack_pitches = frames_pitches(attack_frame_idx, note_df["pitch"])
+
+    # --- points jaunes : débuts positionnés/corrigés ---
     zero_offset_frame = note_df["onset_time"].min() / FRAME_TIME
     quarter_duration = 60 / tempo_bpm
 
-    duration_t = (
+    start_t_corrected = (
         note_df["measure_position"] * beats_per_measure
         + note_df["quarter_position_in_measure"]
     ) * quarter_duration
-    duration_frame_idx = duration_t / FRAME_TIME + zero_offset_frame
-    mask_d = (duration_frame_idx >= start_frame) & (duration_frame_idx <= end_frame)
-    duration_frames = duration_frame_idx[mask_d].tolist()
-    duration_pitches = (note_df.loc[mask_d, "pitch"] - MIDI_OFFSET).tolist()
+    start_frame_idx_corrected = start_t_corrected / FRAME_TIME + zero_offset_frame
+    duration_frames, duration_pitches = frames_pitches(start_frame_idx_corrected, note_df["pitch"])
+
+    # --- points bleus : fin des notes mesurée physiquement (onset_time + duration) ---
+    end_t_raw = note_df["onset_time"] + note_df["duration"]
+    end_frame_idx_raw = end_t_raw / FRAME_TIME
+    end_frames_raw, end_pitches_raw = frames_pitches(end_frame_idx_raw, note_df["pitch"])
+
+    # --- points violets : fin des notes corrigées (start quantifié + quarter_length) ---
+    end_t_corrected = start_t_corrected + note_df["quarter_length"] * quarter_duration
+    end_frame_idx_corrected = end_t_corrected / FRAME_TIME + zero_offset_frame
+    end_frames_corrected, end_pitches_corrected = frames_pitches(end_frame_idx_corrected, note_df["pitch"])
 
     _, axes = plt.subplots(2, 1, figsize=(10, 5))
     axes[0].imshow(model_output["onset"].T, aspect="auto", origin="lower")
@@ -66,10 +78,11 @@ def analysis(model_output, note_df, tempo_bpm, start_time=0, end_time=None, beat
     axes[1].set_ylim(top=60, bottom=20)
     axes[1].set_xlim(left=start_frame, right=end_frame)
 
-    axes[0].scatter(attack_frames, attack_pitches, color="red", s=5, marker="o", zorder=3)
-    axes[1].scatter(attack_frames, attack_pitches, color="red", s=5, marker="o", zorder=3)
-    axes[0].scatter(duration_frames, duration_pitches, color="yellow", s=5, marker="o", zorder=3)
-    axes[1].scatter(duration_frames, duration_pitches, color="yellow", s=5, marker="o", zorder=3)
+    for ax in axes:
+        ax.scatter(attack_frames, attack_pitches, color="red", s=5, marker="o", zorder=3, label="Début (brut)")
+        ax.scatter(duration_frames, duration_pitches, color="yellow", s=5, marker="o", zorder=3, label="Début (corrigé)")
+        ax.scatter(end_frames_raw, end_pitches_raw, color="blue", s=5, marker="o", zorder=3, label="Fin (mesurée)")
+        ax.scatter(end_frames_corrected, end_pitches_corrected, color="purple", s=5, marker="o", zorder=3, label="Fin (corrigée)")
 
     sixteenth_duration = quarter_duration / 4
     sixteenth_duration_frames = sixteenth_duration / FRAME_TIME
@@ -79,6 +92,8 @@ def analysis(model_output, note_df, tempo_bpm, start_time=0, end_time=None, beat
         axes[0].axvline(sixteenth_frame, color="gray", linewidth=0.5, alpha=0.5, zorder=1)
         axes[1].axvline(sixteenth_frame, color="gray", linewidth=0.5, alpha=0.5, zorder=1)
         sixteenth_frame += sixteenth_duration_frames
+
+    axes[0].legend(loc="upper right", fontsize=6)
 
     print("Window displayed.")
     plt.show()
@@ -140,7 +155,7 @@ def assign_voice(positionned_notes, lowest_melody_note=LOWEST_MELODY_NOTE):
 
     for onset_id, group in positionned_notes.groupby("onset_frame", sort=False):
         bass_idx = next(
-            (idx for idx, pitch in zip(group.index, group["pitch"]) if pitch < lowest_melody_note),
+            (idx for idx, pitch in zip(group.index, group["partition_pitch"]) if pitch < lowest_melody_note),
             None
         )
         for idx in group.index:
@@ -162,7 +177,7 @@ def build_voice_in_measure(note_df, voice_name):
     for measure_idx, measure_group in voice_df.groupby("measure_position"):
         notes_in_measure = []
         for onset_frame, onset_group in measure_group.groupby("onset_frame", sort=True):
-            pitches_in_midi = onset_group["pitch"].astype(int).tolist()
+            pitches_in_midi = onset_group["partition_pitch"].astype(int).tolist()
             quarter_position_in_measure = onset_group["quarter_position_in_measure"].iloc[0]
             quarter_length = onset_group["quarter_length"].iloc[0]
             notes_in_measure.append((pitches_in_midi, quarter_position_in_measure, quarter_length))
