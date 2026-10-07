@@ -1,6 +1,7 @@
+import pandas as pd
 from constants import *
 
-def filter_chord_notes(candidates, harmonics_intervals=HARMONIC_INTERVALS):
+def _filter_chord_notes(candidates, harmonics_intervals=HARMONIC_INTERVALS):
     """
     candidates: list of (MIDI, confidence) pairs detected for the same attack.
     Returns the filtered list of actual notes (chord or single note + harmonics).
@@ -50,7 +51,7 @@ def filter_chord_notes(candidates, harmonics_intervals=HARMONIC_INTERVALS):
     return sorted(result, key=lambda x: x[1], reverse=True)
 
 
-def stupid_filter(candidates, ratio_theshold=RATIO_THRESHOLD):
+def _stupid_filter(candidates, ratio_theshold=RATIO_THRESHOLD):
     to_remove = set()
     strong_note = max(candidates, key=lambda x: x[1])
     for candidate in candidates:
@@ -59,3 +60,28 @@ def stupid_filter(candidates, ratio_theshold=RATIO_THRESHOLD):
 
     result = [candidate for candidate in candidates if candidate[0] not in to_remove]
     return sorted(result, key=lambda x: x[1], reverse=True)
+
+
+def apply_chord_filters(note_df, harmonics_intervals=HARMONIC_INTERVALS, ratio_threshold=RATIO_THRESHOLD):
+    """
+    attacks : DataFrame [onset_frame, onset_time, pitch, confidence]
+    Return a DataFrame filtered.
+    """
+    filtered_rows = []
+
+    for onset_frame, group in note_df.groupby("onset_frame", sort=True):
+        t = group["onset_time"].iloc[0]
+        candidates = list(zip(group["pitch"], group["confidence"]))
+
+        candidates = _filter_chord_notes(candidates, harmonics_intervals)
+        candidates = _stupid_filter(candidates, ratio_threshold)
+
+        for pitch, confidence in candidates:
+            filtered_rows.append({
+                "onset_frame": onset_frame,
+                "onset_time": t,
+                "pitch": pitch,
+                "confidence": confidence,
+            })
+
+    return pd.DataFrame(filtered_rows, columns=note_df.columns)

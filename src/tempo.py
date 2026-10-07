@@ -4,7 +4,7 @@ from scipy.stats import linregress
 
 from constants import *
 
-def estimate_tempo_from_attacks(filtered_attack_times, bpm_range=BPM_RANGE, period_resolution=PERIODE_RESOLUTION, tolerance=TOLERANCE, min_ioi=MIN_IOI):
+def estimate_tempo_from_attacks(note_df_onset_time, bpm_range=BPM_RANGE, period_resolution=PERIODE_RESOLUTION, tolerance=TOLERANCE, min_ioi=MIN_IOI):
     """
     Estimates the tempo (BPM) based on a list of note attack times.
     
@@ -16,7 +16,7 @@ def estimate_tempo_from_attacks(filtered_attack_times, bpm_range=BPM_RANGE, peri
 
     Returns (tempo_bpm, confidence_score), where confidence_score is between 0 and 1.
     """
-    times = np.sort(np.array(filtered_attack_times))
+    times = np.sort(np.array(note_df_onset_time))
     iois = np.diff(times)  # inter-onset intervals
     iois = iois[iois > min_ioi]
 
@@ -48,89 +48,109 @@ def estimate_tempo_from_attacks(filtered_attack_times, bpm_range=BPM_RANGE, peri
     return round(tempo_bpm, 2), round(confidence, 3)
 
 
-def assign_note_position(filtered_attacks, tempo_bpm, allowed_positions=STANDARD_POSITIONS, beats_per_measure=BEATS_PER_MESURE):
+def assign_note_position(note_df, tempo_bpm, allowed_positions=STANDARD_POSITIONS, beats_per_measure=BEATS_PER_MESURE):
     """
-    Locating and assigning the position closest to the note based on the detected tempo, while saving the perceived error.
-    filtered_attacks : list of (t, pitches)
-    Returns : raw_positionned_notes, list of note characteristics (pitches, quarter_position_in_measure, measure_position, error)
+    Locating and assigning the position closest to the note based on the detected tempo,
+    while saving the perceived error.
+
+    filtered_attacks : DataFrame avec colonnes onset_frame, onset_time, pitch, confidence
+    Retourne : filtered_attacks avec 3 colonnes ajoutées :
+        quarter_position_in_measure, measure_position, error
     """
     quarter_note_duration = 60 / tempo_bpm
-    raw_positionned_notes = []
-    set_0 = filtered_attacks[0][0] if filtered_attacks else 0.0
+    unique_times = np.sort(note_df["onset_time"].unique())
+    t0 = unique_times[0] if len(unique_times) else 0.0
 
-    candidates = list(allowed_positions) + [beats_per_measure]
+    candidates = np.array(list(allowed_positions) + [beats_per_measure])
 
-    for t, pitches in filtered_attacks:
-        raw_quarter_position = (t - set_0) / quarter_note_duration
+    position_by_time = {}
+    for t in unique_times:
+        raw_quarter_position = (t - t0) / quarter_note_duration
         measure_position = int(raw_quarter_position // beats_per_measure)
         raw_position_in_measure = raw_quarter_position - measure_position * beats_per_measure
 
-        best_pos = None
-        error = None
-        for pos in candidates:
-            distance = pos - raw_position_in_measure
-            if error is None or abs(distance) < abs(error):
-                error = distance
-                best_pos = pos
+        distances = candidates - raw_position_in_measure
+        best_idx = np.argmin(np.abs(distances))
+        best_pos = candidates[best_idx]
+        error = distances[best_idx]
 
-        quarter_position_in_measure = best_pos
-
-        if quarter_position_in_measure >= beats_per_measure:
+        if best_pos >= beats_per_measure:
             measure_position += 1
-            quarter_position_in_measure = 0.0
+            best_pos = 0.0
 
-        raw_positionned_notes.append((pitches, quarter_position_in_measure, measure_position, error))
+        position_by_time[t] = (best_pos, measure_position, error)
 
-    return raw_positionned_notes
+    result = note_df.copy()
+    result["quarter_position_in_measure"] = result["onset_time"].map(lambda t: position_by_time[t][0])
+    result["measure_position"] = result["onset_time"].map(lambda t: position_by_time[t][1])
+    result["error"] = result["onset_time"].map(lambda t: position_by_time[t][2])
+
+    return result
 
 
-def correct_notes_from_true_error(raw_positionned_notes, smallest_step=SMALLEST_STEP, beats_per_measure=BEATS_PER_MESURE):
+def correct_notes_from_true_error(note_df, smallest_step=SMALLEST_STEP, beats_per_measure=BEATS_PER_MESURE):
     """
-    Corrects the theoretical note positions based on the "true" error (continuous drift, unwrapped), regardless of the number of
-    SMALLEST_STEP increments exceeded.
+    Corrects the theoretical note positions based on the "true" error (continuous drift, unwrapped),
+    regardless of the number of SMALLEST_STEP increments exceeded.
 
-    raw_positionned_notes : list of (pitches, quarter_position_in_measure, measure_position, error)
-    Returns : corrected_notes, list of (pitches, quarter_position_in_measure, measure_position, error)
+    positionned_notes : DataFrame avec colonnes onset_frame, onset_time, pitch, confidence,
+        quarter_position_in_measure, measure_position, error
+    Retourne : positionned_notes avec quarter_position_in_measure et measure_position corrigées.
     """
+    onset_summary = (
+        note_df
+        .drop_duplicates(subset="onset_time")
+        .sort_values("onset_time")
+    )
 
-    y = [note[-1] for note in raw_positionned_notes]
-    true_error = np.unwrap(np.array(y), period=SMALLEST_STEP)
+    y = onset_summary["error"].to_numpy()
+    true_error = np.unwrap(y, period=smallest_step)
 
-    corrected_notes = []
+    n_steps = np.round(true_error / smallest_step).astype(int)
+    offset = n_steps * smallest_step
 
-    for i, (pitches, quarter_position_in_measure, measure_position, error) in enumerate(raw_positionned_notes):
-        n_steps = round(true_error[i] / smallest_step)
-        offset = n_steps * smallest_step
+    new_quarter_position = onset_summary["quarter_position_in_measure"].to_numpy() + offset
+    new_measure_position = onset_summary["measure_position"].to_numpy().copy()
 
-        new_quarter_position = quarter_position_in_measure + offset
-        new_measure_position = measure_position
+    below = new_quarter_position < 0
+    new_measure_position[below] -= 1
+    new_quarter_position[below] += beats_per_measure
 
-        if new_quarter_position < 0:
-            new_measure_position -= 1
-            new_quarter_position += beats_per_measure
-        elif new_quarter_position >= beats_per_measure:
-            new_measure_position += 1
-            new_quarter_position -= beats_per_measure
+    above = new_quarter_position >= beats_per_measure
+    new_measure_position[above] += 1
+    new_quarter_position[above] -= beats_per_measure
 
-        corrected_notes.append((pitches, new_quarter_position, new_measure_position, error))
+    correction_by_time = {
+        t: (qpos, mpos)
+        for t, qpos, mpos in zip(onset_summary["onset_time"], new_quarter_position, new_measure_position)
+    }
 
-    return corrected_notes
+    result = note_df.copy()
+    result["quarter_position_in_measure"] = result["onset_time"].map(lambda t: correction_by_time[t][0])
+    result["measure_position"] = result["onset_time"].map(lambda t: correction_by_time[t][1])
+
+    return result
 
 
-def view_tempo_drift(notes, smallest_step=SMALLEST_STEP):
-    """Plot the perceive error and the "true" error of the notes"""
+def view_tempo_drift(note_df, smallest_step=SMALLEST_STEP, beats_per_measure=BEATS_PER_MESURE):
+    """Plot the perceived error and the "true" error of the notes"""
+
+    onset_summary = (
+        note_df
+        .drop_duplicates(subset="onset_frame")
+        .sort_values("onset_frame")
+    )
+
+    y = onset_summary["error"].to_numpy()
+    x = (onset_summary["measure_position"] * beats_per_measure + onset_summary["quarter_position_in_measure"]).to_numpy()
 
     _, axes = plt.subplots(2, 1, figsize=(10, 8))
-    y = [note[-1] for note in notes]
-    x = [note[2] * 4 + note[1] for note in notes]
     axes[0].plot(x, y)
     axes[0].set_xlabel("Quater Position")
     axes[0].set_ylabel("Tempo Drift")
 
-    y = [note[-1] for note in notes]
-    true_error = np.unwrap(np.array(y), period=smallest_step)
-    x_array = np.array([note[2] * 4 + note[1] for note in notes])
-    slope, intercept, r_value, p_value, std_err = linregress(x_array, true_error)
+    true_error = np.unwrap(y, period=smallest_step)
+    slope, intercept, r_value, p_value, std_err = linregress(x, true_error)
 
     axes[1].plot(x, true_error)
     axes[1].set_xlabel("Quater Position")
@@ -138,100 +158,90 @@ def view_tempo_drift(notes, smallest_step=SMALLEST_STEP):
 
     print(f"Pente (dérive par note) : {slope:.5f}")
     print(f"Ordonnée à l'origine   : {intercept:.5f}")
-    x_array = np.array(x)
-    axes[1].scatter(x_array, true_error, color="orange", s=15, zorder=3, label="Points sélectionnés")
-    axes[1].plot(x_array, slope * x_array + intercept, color="red",
-              linestyle="--", label=f"Régression (pente={slope:.5f})")
+    axes[1].scatter(x, true_error, color="orange", s=15, zorder=3, label="Points sélectionnés")
+    axes[1].plot(x, slope * x + intercept, color="red",
+                 linestyle="--", label=f"Régression (pente={slope:.5f})")
 
     print("Window displayed.")
     plt.show()
 
 
-def assign_note_durations(notes, default_last_duration=1.0):
+def assign_note_durations(notes, default_last_duration=1.0, beats_per_measure=BEATS_PER_MESURE):
     """
-    notes: list of (t, pitches) where pitches is a list of (midi, confidence)
-    tempo_bpm: estimated tempo, in beats per minute
-    allowed_durations: list of valid quarterLengths
-    default_last_duration (temporary solution): quarterLength to use for the last note
-    
-    Returns a list of (t, pitches, quarter_length)
+    notes : DataFrame avec colonnes onset_frame (ou un identifiant d'onset), pitch,
+        quarter_position_in_measure, measure_position (+ autres colonnes déjà présentes)
+    default_last_duration (temporary solution) : quarterLength à utiliser pour la dernière note
+    beats_per_measure : nombre de temps par mesure
+
+    Retourne notes avec une colonne "quarter_length" ajoutée.
     """
+    onset_summary = (
+        notes
+        .drop_duplicates(subset="onset_frame")
+        .sort_values("onset_frame")
+        .copy()
+    )
 
-    results = []
-    n = len(notes)
+    onset_summary["abs_position"] = (
+        onset_summary["measure_position"] * beats_per_measure
+        + onset_summary["quarter_position_in_measure"]
+    )
 
-    for i, (pitches, quarter_position_in_measure, measure) in enumerate(notes):
-        if i < n - 1:
-            next_t = notes[i + 1][1] + notes[i + 1][2] * 4
-            quarter_length = next_t - (measure * 4 + quarter_position_in_measure)
-        else:
-            quarter_length = default_last_duration
+    abs_positions = onset_summary["abs_position"].to_numpy()
+    quarter_lengths = np.empty(len(abs_positions))
+    quarter_lengths[:-1] = np.diff(abs_positions)
+    quarter_lengths[-1] = default_last_duration
 
-        results.append((pitches, quarter_position_in_measure, measure, quarter_length))
+    duration_by_onset = dict(zip(onset_summary["onset_frame"], quarter_lengths))
 
-    return results
+    result = notes.copy()
+    result["quarter_length"] = result["onset_frame"].map(duration_by_onset)
+    return result
 
 
-def extract_attacks_duration(notes, prob_matrix, frame_time=FRAME_TIME, midi_offset=MIDI_OFFSET,
+def extract_attacks_duration(notes_df, prob_matrix, frame_time=FRAME_TIME, midi_offset=MIDI_OFFSET,
                            threshold=0.3, hysteresis_frames=3, min_duration_frames=1):
     """
-    notes : list of (t, pitches) 
-        pitches : list of (pitch_midi, confidence)
+    notes_df : DataFrame avec colonnes onset_frame, onset_time, pitch, confidence
     prob_matrix : array (n_frames, n_pitches)
 
-    active_threshold_ratio : fraction de la confidence à l'onset en dessous de laquelle
-        on considère la note "éteinte"
-    hysteresis_frames : nb de frames consécutives sous le seuil avant de couper
-        (évite de couper sur un creux ponctuel/bruit)
-    min_duration_frames : durée minimale plancher, en frames (évite les durées ~0)
-
-    Retourne : list of (t, [(pitch, confidence, duration_seconds), ...])
+    Return notes_df with add column "duration" (in seconds).
     """
     n_frames, n_pitches = prob_matrix.shape
+    durations = np.empty(len(notes_df))
 
-    # Regrouper les frames d'onset par pitch, pour pouvoir borner
-    # la recherche par "prochain onset sur cette même hauteur"
-    pitch_onset_frames = {}
-    for t, pitches in notes:
-        frame_idx = int(round(t / frame_time))
-        for pitch, conf in pitches:
-            pitch_onset_frames.setdefault(pitch, []).append(frame_idx)
-    for pitch in pitch_onset_frames:
-        pitch_onset_frames[pitch].sort()
+    # Pour chaque pitch, la liste triée des frames d'onset (pour borner par le prochain onset)
+    onsets_by_pitch = {
+        pitch: sorted(group["onset_frame"].tolist())
+        for pitch, group in notes_df.groupby("pitch")
+    }
 
-    results = []
-    for t, pitches in notes:
-        onset_frame = int(round(t / frame_time))
-        note_results = []
+    for i, note in enumerate(notes_df.itertuples()):
+        column = note.pitch - midi_offset
+        if not (0 <= column < n_pitches):
+            durations[i] = np.nan
+            continue
 
-        for pitch, conf in pitches:
-            column = pitch - midi_offset
-            if not (0 <= column < n_pitches):
-                continue
+        same_pitch_onsets = onsets_by_pitch[note.pitch]
+        next_onset_frame = next(
+            (f for f in same_pitch_onsets if f > note.onset_frame), n_frames
+        )
 
-            # borne haute : le prochain onset sur la même hauteur (legato/notes répétées)
-            same_pitch_onsets = pitch_onset_frames.get(pitch, [])
-            next_onset_frame = next(
-                (f for f in same_pitch_onsets if f > onset_frame), n_frames
-            )
+        last_active_frame = note.onset_frame
+        below_streak = 0
 
-            last_active_frame = onset_frame
-            below_streak = 0
+        for frame in range(note.onset_frame, next_onset_frame):
+            if prob_matrix[frame, column] >= threshold:
+                last_active_frame = frame
+                below_streak = 0
+            else:
+                below_streak += 1
+                if below_streak >= hysteresis_frames:
+                    break
 
-            for frame in range(onset_frame, next_onset_frame):
-                if prob_matrix[frame, column] >= threshold:
-                    last_active_frame = frame
-                    below_streak = 0
-                else:
-                    below_streak += 1
-                    if below_streak >= hysteresis_frames:
-                        break
+        duration_frames = max(last_active_frame - note.onset_frame + 1, min_duration_frames)
+        durations[i] = duration_frames * frame_time
 
-            duration_frames = max(last_active_frame - onset_frame + 1, min_duration_frames)
-            duration = duration_frames * frame_time
-
-            note_results.append((pitch, conf, duration))
-
-        results.append((t, note_results))
-
-    return results
+    notes_df = notes_df.copy()
+    notes_df["duration"] = durations
+    return notes_df
