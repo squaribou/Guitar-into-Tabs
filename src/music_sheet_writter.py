@@ -2,6 +2,7 @@ from music21 import stream, tempo, note, chord, clef, key, meter, tie, beam
 import math
 import subprocess
 import logging
+import numpy as np
 
 from constants import KEY_SIGNATURE_RANGE, MUSESCORE_PATH, BEATS_PER_MESURE
 
@@ -171,6 +172,42 @@ def _fill_voice(voice, notes_in_measure, pending, beats_per_measure):
     return new_pending
 
 
+def _finalize_last_note(voice_in_measure, beats_per_measure):
+    """
+    Trouve la note qui finit le plus tard. Dans sa dernière mesure :
+      - si elle y dure strictement plus de 1 temps -> elle est prolongée jusqu'à la barre de mesure
+      - sinon -> elle reste telle quelle et on renvoie le silence à ajouter après elle
+    Retourne (index_mesure, position_du_silence, durée_du_silence) ou None.
+    """
+    best = None  # (end_abs, start_abs, mesure, index)
+    for i, notes in enumerate(voice_in_measure):
+        for k, (pitches, position, quarter_length) in enumerate(notes):
+            start_abs = i * beats_per_measure + position
+            end_abs = start_abs + quarter_length
+            if best is None or end_abs > best[0] + 1e-9:
+                best = (end_abs, start_abs, i, k)
+    if best is None:
+        return None
+
+    end_abs, start_abs, i, k = best
+    last_measure = int(np.ceil(end_abs / beats_per_measure - 1e-9)) - 1
+    measure_start = last_measure * beats_per_measure
+    measure_end = measure_start + beats_per_measure
+
+    if abs(end_abs - measure_end) < 1e-9:
+        return None  # finit déjà pile sur la barre de mesure
+
+    duration_in_last_measure = end_abs - max(start_abs, measure_start)
+
+    if duration_in_last_measure > 1 + 1e-9:
+        pitches, position, quarter_length = voice_in_measure[i][k]
+        voice_in_measure[i][k] = (pitches, position, quarter_length + (measure_end - end_abs))
+        return None
+
+    # note courte : on la laisse, et on comble la fin de mesure avec un silence
+    return (last_measure, end_abs - measure_start, measure_end - end_abs)
+
+
 def create_music_sheet(melody_voice_in_measure: list, low_voice_in_measure: list, tempo_bpm: int, beats_per_measure=BEATS_PER_MESURE) -> stream.Stream:
     """Create a music_sheet"""
 
@@ -178,7 +215,18 @@ def create_music_sheet(melody_voice_in_measure: list, low_voice_in_measure: list
     score.append(clef.Treble8vbClef())
     score.append(meter.TimeSignature(f"{beats_per_measure}/4"))
 
-    nb_measure = max(len(melody_voice_in_measure), len(low_voice_in_measure))
+    melody_rest = _finalize_last_note(melody_voice_in_measure, beats_per_measure)
+    low_rest = _finalize_last_note(low_voice_in_measure, beats_per_measure)
+
+    def _last_end(voice):
+        ends = [i * beats_per_measure + p + ql
+                for i, notes in enumerate(voice) for _, p, ql in notes]
+        return max(ends, default=0)
+
+    last_end = max(_last_end(melody_voice_in_measure), _last_end(low_voice_in_measure))
+    nb_measure = max(len(melody_voice_in_measure), len(low_voice_in_measure),
+                     int(np.ceil(last_end / beats_per_measure - 1e-9)))
+
     melody_voice_in_measure.extend([[] for _ in range(nb_measure - len(melody_voice_in_measure))])
     low_voice_in_measure.extend([[] for _ in range(nb_measure - len(low_voice_in_measure))])
 
@@ -187,7 +235,7 @@ def create_music_sheet(melody_voice_in_measure: list, low_voice_in_measure: list
 
     for i in range(nb_measure):
         try:
-            measure = stream.Measure()
+            measure = stream.Measure(number=i+1)
             melody_voice = stream.Voice()
             low_voice = stream.Voice()
 
@@ -211,26 +259,43 @@ def create_music_sheet(melody_voice_in_measure: list, low_voice_in_measure: list
             pending_bass_tie = _fill_voice(low_voice, low_voice_in_measure[i],
                                            pending_bass_tie, beats_per_measure)
 
+            if melody_rest and melody_rest[0] == i:
+                melody_voice.insert(melody_rest[1], note.Rest(quarterLength=melody_rest[2]))
+            if low_rest and low_rest[0] == i:
+                low_voice.insert(low_rest[1], note.Rest(quarterLength=low_rest[2]))
+
             # ___Ligatures (après le découpage à la barre de mesure)___
             _split_at_beats(melody_voice)
             _apply_manual_beams(melody_voice, beats_per_measure)
 
-            print(i, "mélodie:", melody_voice.highestTime, "basse:", low_voice.highestTime,
+            print(i+1, "mélodie:", melody_voice.highestTime, "basse:", low_voice.highestTime,
                   "attendu:", beats_per_measure)
             measure.insert(0, melody_voice)
             measure.insert(0, low_voice)
             score.append(measure)
 
         except Exception as e:
-            print(f"Error at measure {i} : {e}")
+            print(f"Error at measure {i+1} : {e}")
             break
 
     try:
         _force_sharp_spelling(score)
         best_key_signature = _find_best_key_signature(score)
-        score.insert(0, key.KeySignature(best_key_signature))
+        ks = key.KeySignature(best_key_signature)
+
+        first_measure = score.getElementsByClass(stream.Measure).first()
+        first_measure.insert(0, ks)
+
+        # Reboot sharp spelling after adding the key signature, to ensure consistency
+        for n in score.recurse().notes:
+            for p in n.pitches:
+                if p.accidental is not None:
+                    p.accidental.displayStatus = None
+        score.makeAccidentals(useKeySignature=ks, overrideStatus=True, inPlace=True)
+
     except Exception as e:
         print(f"Error occurred while processing key signature: {e}")
+
     return score
 
 

@@ -1,25 +1,30 @@
 import pandas as pd
 from constants import *
 
-def _filter_chord_notes(candidates, harmonics_intervals=HARMONIC_INTERVALS):
+def _filter_chord_notes(candidates, previous_pitches=None, harmonic_intervals=HARMONIC_INTERVALS, previous_penalty=0.5):
     """
     candidates: list of (MIDI, confidence) pairs detected for the same attack.
     Returns the filtered list of actual notes (chord or single note + harmonics).
     """
+
+    # --- STEP 1 : groups the note by degre (same note, different octave) ---
+    if previous_pitches is None:
+        previous_pitches = set()
     if not candidates:
         return []
 
-    # --- STEP 1 : groups the note by degre (same note, different octave) ---
     groups = {}
-    for midi, confidence in candidates:
-        degre = midi % 12
-        groups.setdefault(degre, []).append((midi, confidence))
+    for midi, conf in candidates:
+        pc = midi % 12
+        adjusted_conf = conf * previous_penalty if midi in previous_pitches else conf
+        groups.setdefault(pc, []).append((midi, conf, adjusted_conf))
 
     survivors = {}
-    for degre, members in groups.items():
-        representative = max(members, key=lambda x: x[1])
-        fundamental = min(members, key=lambda x: x[0])
-        survivors[degre] = {"representative": representative, "fundamental": fundamental}
+    for pc, members in groups.items():
+        representative_full = max(members, key=lambda x: x[2])
+        representative = (representative_full[0], representative_full[1])
+        fundamental = min(members, key=lambda x: x[0])[:2]
+        survivors[pc] = {"representative": representative, "fundamental": fundamental}
 
     # --- STEP 2 : eliminate harmonics ---
     to_remove = set()
@@ -39,7 +44,7 @@ def _filter_chord_notes(candidates, harmonics_intervals=HARMONIC_INTERVALS):
                 if interval <= 0:
                     continue
 
-                for harmonic_interval, max_ratio in harmonics_intervals.items():
+                for harmonic_interval, max_ratio in harmonic_intervals.items():
                     if interval == harmonic_interval:
                         ratio = rep_conf / fund_conf if fund_conf > 0 else 1.0
                         if ratio <= max_ratio:
@@ -62,26 +67,29 @@ def _stupid_filter(candidates, ratio_theshold=RATIO_THRESHOLD):
     return sorted(result, key=lambda x: x[1], reverse=True)
 
 
-def apply_chord_filters(note_df, harmonics_intervals=HARMONIC_INTERVALS, ratio_threshold=RATIO_THRESHOLD):
+def apply_chord_filters(note_df, harmonics_intervals=HARMONIC_INTERVALS, ratio_threshold=RATIO_THRESHOLD,
+                          previous_penalty=0.5):
     """
-    attacks : DataFrame [onset_frame, onset_time, pitch, confidence]
-    Return a DataFrame filtered.
+    attacks : DataFrame avec au moins les colonnes [onset_frame, onset_time, pitch, confidence]
+    Return a DataFrame filtered, en conservant toutes les colonnes d'origine.
     """
-    filtered_rows = []
+    filtered_groups = []
+    previous_pitches = set()
 
     for onset_frame, group in note_df.groupby("onset_frame", sort=True):
-        t = group["onset_time"].iloc[0]
         candidates = list(zip(group["pitch"], group["confidence"]))
 
-        candidates = _filter_chord_notes(candidates, harmonics_intervals)
+        candidates = _filter_chord_notes(candidates, previous_pitches, harmonics_intervals, previous_penalty)
         candidates = _stupid_filter(candidates, ratio_threshold)
 
-        for pitch, confidence in candidates:
-            filtered_rows.append({
-                "onset_frame": onset_frame,
-                "onset_time": t,
-                "pitch": pitch,
-                "confidence": confidence,
-            })
+        kept_pitches = {pitch for pitch, confidence in candidates}
 
-    return pd.DataFrame(filtered_rows, columns=note_df.columns)
+        filtered_group = group[group["pitch"].isin(kept_pitches)]
+        filtered_groups.append(filtered_group)
+
+        previous_pitches = kept_pitches
+
+    if not filtered_groups:
+        return note_df.iloc[0:0]  # DataFrame vide avec les bonnes colonnes
+
+    return pd.concat(filtered_groups, ignore_index=True)

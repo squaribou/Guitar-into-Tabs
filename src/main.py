@@ -6,7 +6,7 @@ import pandas as pd
 logging.getLogger("root").setLevel(logging.ERROR)
 
 from constants import SAMPLE_RATE, MAX_TEMPO_BPM
-from basics import predict_from_array, analysis, extract_note_attacks, assign_voice, build_voice_in_measure
+from basics import predict_from_array, analysis, extract_note_attacks, assign_voice, build_voice_in_measure, view_chords
 from frequence_analyser import get_fft, top_2_fundamental_frequencies
 from audio_listener import listen_audio
 from music_sheet_writter import create_music_sheet, display_music_sheet
@@ -35,14 +35,23 @@ def get_note_fft(file_path, starting_time_in_seconds, start_time, end_time):
     plt.show()
 
 
-def main(file_path, starting_time_in_seconds=0, duration_in_seconds=None, capo=0, max_tempo_bpm=MAX_TEMPO_BPM, sample_rate=SAMPLE_RATE):
+def main(file_path, starting_time_in_seconds=0, end_time_in_seconds=None, capo=0, max_tempo_bpm=MAX_TEMPO_BPM, sample_rate=SAMPLE_RATE):
     """Main function of the project"""
 
     print("Loading audio file...")
-    audio, _ = librosa.load(file_path, sr=sample_rate, offset=starting_time_in_seconds, duration=duration_in_seconds)
+    audio, _ = librosa.load(file_path, sr=sample_rate, offset=starting_time_in_seconds, duration=end_time_in_seconds-starting_time_in_seconds if end_time_in_seconds is not None else None)
     print("Audio file loaded.")
     model_output, _, _ = predict_from_array(audio)
     note_df = extract_note_attacks(model_output["onset"])
+
+    note_df["partition_pitch"] = note_df["pitch"].apply(lambda p: p - capo)
+    note_df = assign_voice(note_df)
+
+    # ___Possible chords analysis___
+    # print(note_df.head(15))
+    # view_chords(note_df, 2399)
+    # return
+
     note_df = apply_chord_filters(note_df)
     note_df = extract_attacks_duration(note_df, model_output["note"])
 
@@ -56,10 +65,6 @@ def main(file_path, starting_time_in_seconds=0, duration_in_seconds=None, capo=0
     note_df  = assign_note_position(note_df, tempo_bpm)
     note_df = correct_notes_from_true_error(note_df)
 
-    # ___Apply capo___
-    note_df["partition_pitch"] = note_df["pitch"].apply(lambda p: p - capo)
-
-    note_df = assign_voice(note_df)
     note_df = assign_note_quarter_length(note_df, tempo_bpm)
 
     # ___Analysis of the notes___
@@ -68,7 +73,8 @@ def main(file_path, starting_time_in_seconds=0, duration_in_seconds=None, capo=0
     pd.set_option('display.max_rows', None)
     print(note_df[colonnes_utiles])
     # view_tempo_drift(note_df)
-    # analysis(model_output, note_df, tempo_bpm, start_time=18, end_time=25)
+    # analysis(model_output, note_df, tempo_bpm, start_time=30, end_time=40)
+    # return
 
     # ___Prepare the voices for the score___
     melody_voice_in_measure = build_voice_in_measure(note_df, "melody")
@@ -83,9 +89,9 @@ def main(file_path, starting_time_in_seconds=0, duration_in_seconds=None, capo=0
 if __name__ == "__main__":
     try:
         file_path = "audio_files/Undertale.wav" # Basic and simple music
-        main(file_path, starting_time_in_seconds=0, duration_in_seconds=49, capo=2)
+        main(file_path, starting_time_in_seconds=0, end_time_in_seconds=51, capo=2)
         # file_path = "audio_files/La Boum.wav"
-        # main(file_path, starting_time_in_seconds=5, duration_in_seconds=134)
+        # main(file_path, starting_time_in_seconds=5, end_time_in_seconds=134)
 
         # note_fft(2.1,  0.95, 1.10  )
         # listen_audio(file_path,starting_time_in_seconds=20, duration_in_seconds=40, speed_factor = 0.7)

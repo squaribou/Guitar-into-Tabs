@@ -14,7 +14,7 @@ SAMPLE_RATE = 22050
 
 # Note detection parameters
 DISTANCE_FRAMES = 8
-HEIGHT = 0.6
+HEIGHT = 0.7 # Height threshold for note detection (confidence)
 PROMINENCE = 0.15
 RELATIVE_THERSHOLD = 0.6
 
@@ -34,7 +34,7 @@ BPM_RANGE = (40, 300)
 MAX_TEMPO_BPM = 100
 
 # Voice separator parameters
-LOWEST_MELODY_NOTE = 55 # G3 in midi
+HIGHTEST_LOW_NOTE = 50 # D3 in midi
 
 # Music sheet parameters
 MUSESCORE_PATH = "C:/Program Files/MuseScore 4/bin/MuseScore4.exe"

@@ -78,11 +78,10 @@ def analysis(model_output, note_df, tempo_bpm, start_time=0, end_time=None, beat
     axes[1].set_ylim(top=60, bottom=20)
     axes[1].set_xlim(left=start_frame, right=end_frame)
 
-    for ax in axes:
-        ax.scatter(attack_frames, attack_pitches, color="red", s=5, marker="o", zorder=3, label="Début (brut)")
-        ax.scatter(duration_frames, duration_pitches, color="yellow", s=5, marker="o", zorder=3, label="Début (corrigé)")
-        ax.scatter(end_frames_raw, end_pitches_raw, color="blue", s=5, marker="o", zorder=3, label="Fin (mesurée)")
-        ax.scatter(end_frames_corrected, end_pitches_corrected, color="purple", s=5, marker="o", zorder=3, label="Fin (corrigée)")
+    axes[0].scatter(attack_frames, attack_pitches, color="red", s=5, marker="o", zorder=3, label="Début (brut)")
+    axes[0].scatter(duration_frames, duration_pitches, color="yellow", s=5, marker="o", zorder=3, label="Début (corrigé)")
+    axes[1].scatter(end_frames_raw, end_pitches_raw, color="blue", s=5, marker="o", zorder=3, label="Fin (mesurée)")
+    axes[1].scatter(end_frames_corrected, end_pitches_corrected, color="purple", s=5, marker="o", zorder=3, label="Fin (corrigée)")
 
     sixteenth_duration = quarter_duration / 4
     sixteenth_duration_frames = sixteenth_duration / FRAME_TIME
@@ -139,7 +138,7 @@ def extract_note_attacks(onset_matrix, distance_frames=DISTANCE_FRAMES, height=H
     return pd.DataFrame(rows, columns=["onset_frame", "onset_time", "pitch", "confidence"])
 
 
-def assign_voice(positionned_notes, lowest_melody_note=LOWEST_MELODY_NOTE):
+def assign_voice(positionned_notes, highest_low_note=HIGHTEST_LOW_NOTE):
     """
     positionned_notes : DataFrame avec au moins onset_frame, pitch (+ colonnes déjà ajoutées :
         confidence, quarter_position_in_measure, measure_position, error)
@@ -155,7 +154,7 @@ def assign_voice(positionned_notes, lowest_melody_note=LOWEST_MELODY_NOTE):
 
     for onset_id, group in positionned_notes.groupby("onset_frame", sort=False):
         bass_idx = next(
-            (idx for idx, pitch in zip(group.index, group["partition_pitch"]) if pitch < lowest_melody_note),
+            (idx for idx, pitch in zip(group.index, group["partition_pitch"]) if pitch <= highest_low_note),
             None
         )
         for idx in group.index:
@@ -186,3 +185,18 @@ def build_voice_in_measure(note_df, voice_name):
         voice_in_measure[int(measure_idx)] = notes_in_measure
 
     return voice_in_measure
+
+
+def view_chords(note_df, onset_frame)->None:
+    """Print detected notes in a choosen onset_frame (in a chords)"""
+    if note_df.empty:
+        print("No notes detected.")
+        return
+
+    onset_group = note_df[note_df["onset_frame"] == onset_frame]
+    if onset_group.empty:
+        print("No chords")
+    else:
+        onset_group["notes"] = librosa.midi_to_note(onset_group["partition_pitch"])
+        print(onset_group)
+    return

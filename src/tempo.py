@@ -218,17 +218,17 @@ def _merge_dropped_notes(note_df, eps=1e-9):
     return kept.sort_index()
 
 
-def assign_note_quarter_length(note_df, tempo_bpm, allowed_positions=STANDARD_POSITIONS, 
+def assign_note_quarter_length(note_df, tempo_bpm, allowed_durations=STANDARD_DURATIONS, 
                                  beats_per_measure=BEATS_PER_MESURE, snap_to_next_ratio=0.85):
     """
     Add quarter_length to note_df based on the measured duration (in seconds),
     bounded by the next onset in the same voice. If the measured duration covers
     at least `snap_to_next_ratio` of that gap, quarter_length snaps exactly to
     the gap (the note is considered sustained until the next note).
-    Notes whose quarter_length ends up being 0 are dropped.
+    Notes whose quarter_length ends up being 0 are merged.
     """
     quarter_note_duration = 60 / tempo_bpm
-    candidates = np.array(allowed_positions)
+    candidates = np.array(allowed_durations)
     note_df = note_df.copy()
 
     note_df["abs_position"] = (
