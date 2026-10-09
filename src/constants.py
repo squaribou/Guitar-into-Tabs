@@ -20,11 +20,20 @@ RELATIVE_THERSHOLD = 0.6
 
 # Note filter parameters
 HARMONIC_INTERVALS = {
+    12: 0.98,  # octave (2nd harmonic) not lower
     19: 0.9,   # octave + fifth (3rd harmonic)
+    24: 0.8,  # 2 octaves (4th harmonic)
     28: 0.85,  # 2 octaves + major third (5th harmonic)
     31: 0.85,  # 2 octaves + a perfect fifth (6th harmonic)
+    36: 0.8,   # 3 octaves (8th harmonic)
 }
-RATIO_THRESHOLD = 0.8
+RATIO_THRESHOLD = 0.8 # Ratio threshold for melody notes (but especially non-related note)
+RATIO_THRESHOLD_LOW_NOTE = 0.8 # Ratio threshold for low notes (but especially non-related note)
+LOW_NOTE_ADJUSTMENT = 1 
+OCTAVE_INTERVALS = {
+    12: 0.96, # not lower
+    24: 0.8,
+}
 
 # Tempo parameters
 MIN_IOI = 0.05
