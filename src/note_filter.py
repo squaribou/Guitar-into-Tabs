@@ -53,12 +53,13 @@ def _filter_chord_notes(candidates, previous_pitches=None, harmonic_intervals=HA
     return sorted(kept, key=lambda x: x[1], reverse=True)
 
 
-def _stupid_filter(candidates, ratio_threshold=RATIO_THRESHOLD, ratio_threshold_low_note=RATIO_THRESHOLD_LOW_NOTE):
+def _stupid_filter(candidates, ratio_threshold=RATIO_THRESHOLD, threshold=THRESHOLD):
     to_remove = set()
     strong_note = max(candidates, key=lambda x: x[1])
+    if len(candidates) == 1 and strong_note[1] < threshold:
+        return []
     for candidate in candidates:
-        effective_threshold = ratio_threshold_low_note if candidate[2] else ratio_threshold
-        if candidate[1] / strong_note[1] < effective_threshold:
+        if candidate[1] / strong_note[1] < ratio_threshold:
             to_remove.add(candidate[0])
 
     result = [candidate for candidate in candidates if candidate[0] not in to_remove]

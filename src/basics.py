@@ -166,6 +166,7 @@ def assign_voice(positionned_notes, highest_low_note=HIGHTEST_LOW_NOTE):
 
 
 def build_voice_in_measure(note_df, voice_name):
+    """Group notes by measure and quarter position, returning a list of lists of notes for the specified voice."""
     voice_df = note_df[note_df["voice"] == voice_name]
     if voice_df.empty:
         return []
@@ -175,13 +176,11 @@ def build_voice_in_measure(note_df, voice_name):
 
     for measure_idx, measure_group in voice_df.groupby("measure_position"):
         notes_in_measure = []
-        for onset_frame, onset_group in measure_group.groupby("onset_frame", sort=True):
-            pitches_in_midi = onset_group["partition_pitch"].astype(int).tolist()
-            quarter_position_in_measure = onset_group["quarter_position_in_measure"].iloc[0]
-            quarter_length = onset_group["quarter_length"].iloc[0]
-            notes_in_measure.append((pitches_in_midi, quarter_position_in_measure, quarter_length))
+        for position, pos_group in measure_group.groupby("quarter_position_in_measure", sort=True):
+            pitches_in_midi = sorted(set(pos_group["partition_pitch"].astype(int).tolist()))
+            quarter_length = pos_group["quarter_length"].max()
+            notes_in_measure.append((pitches_in_midi, position, quarter_length))
 
-        notes_in_measure.sort(key=lambda x: x[1])  # ordre chronologique dans la mesure
         voice_in_measure[int(measure_idx)] = notes_in_measure
 
     return voice_in_measure
@@ -200,3 +199,26 @@ def view_chords(note_df, onset_frame)->None:
         onset_group["notes"] = librosa.midi_to_note(onset_group["partition_pitch"])
         print(onset_group)
     return
+
+
+def view_notes(note_df, start_time, end_time)->None:
+    """Print detected notes in a choosen time range"""
+    if note_df.empty:
+        print("No notes detected.")
+        return
+
+    time_group = note_df[(note_df["onset_time"] >= start_time) & (note_df["onset_time"] <= end_time)]
+    if time_group.empty:
+        print("No notes in this time range")
+    else:
+        time_group["notes"] = librosa.midi_to_note(time_group["partition_pitch"])
+        print(time_group)
+    return
+
+
+def confidence_correction(note_df, correction=CONFIDENCE_CORRECTION, highest_low_note=HIGHTEST_LOW_NOTE):
+    """Apply a small correction to the confidence values of the low notes."""
+    low_note_df = note_df[note_df["voice"] == "low"]
+    low_note_df["confidence"] = low_note_df["confidence"] + correction*abs(highest_low_note - low_note_df["partition_pitch"])
+    note_df.update(low_note_df)
+    return note_df

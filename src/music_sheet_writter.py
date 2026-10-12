@@ -62,67 +62,54 @@ def _find_best_key_signature(score: stream.Stream, key_signature_range=KEY_SIGNA
     return best_sharps
 
 
-def _duration_type_and_count(quarter_length):
-    """Retourne le type music21 et le nombre de barres de ligature pour une durée donnée."""
-    if quarter_length >= 1.0:
-        return None, 0
-    elif quarter_length >= 0.5:
-        return 'eighth', 1
-    elif quarter_length >= 0.25:
-        return '16th', 2
-    elif quarter_length >= 0.125:
-        return '32nd', 3
-    else:
-        return '64th', 4
+def _beam_levels(ql):
+    if ql >= 0.5:   return 1   # croche
+    if ql >= 0.25:  return 2   # double-croche
+    if ql >= 0.125: return 3
+    return 4
 
 
 def _apply_manual_beams(voice: stream.Voice, beats_per_measure: int):
-    """
-    Applique des ligatures manuelles aux croches (et plus courtes) consécutives
-    à l'intérieur d'un même temps, pour contourner le beaming automatique
-    parfois incorrect de music21 (notamment avec des Voice multiples).
-    """
-    elements = list(voice.notesAndRests)
     beat_groups = {}
-
-    for el in elements:
-        if isinstance(el, note.Rest):
-            continue  # un silence casse toujours la ligature
-        beat_index = int(el.offset)  # 1 noire = 1 temps, donc int(offset) = numéro du temps
-        beat_groups.setdefault(beat_index, []).append(el)
+    for el in voice.notesAndRests:
+        if isinstance(el, note.Rest) or el.quarterLength >= 1.0:
+            continue
+        beat_groups.setdefault(int(el.offset + 1e-6), []).append(el)
 
     for group in beat_groups.values():
-        beamable = [el for el in group if el.quarterLength < 1.0]
-        if len(beamable) < 2:
-            continue  # il faut au moins 2 notes pour ligaturer
+        group.sort(key=lambda e: e.offset)
+        if len(group) < 2:
+            continue
+        levels = [_beam_levels(e.quarterLength) for e in group]
 
-        for idx, el in enumerate(beamable):
-            dur_type, _ = _duration_type_and_count(el.quarterLength)
-            if dur_type is None:
-                continue
-
+        for idx, el in enumerate(group):
             el.beams = beam.Beams()
-            if idx == 0:
-                beam_type = 'start'
-            elif idx == len(beamable) - 1:
-                beam_type = 'stop'
-            else:
-                beam_type = 'continue'
-
-            el.beams.fill(dur_type, type=beam_type)
+            for lvl in range(1, levels[idx] + 1):
+                prev_has = idx > 0 and levels[idx - 1] >= lvl
+                next_has = idx < len(group) - 1 and levels[idx + 1] >= lvl
+                if prev_has and next_has:
+                    el.beams.append('continue')
+                elif next_has:
+                    el.beams.append('start')
+                elif prev_has:
+                    el.beams.append('stop')
+                else:  # double-croche isolée : petit crochet
+                    el.beams.append('partial', 'left' if idx > 0 else 'right')
 
 
 def _split_at_beats(voice: stream.Voice):
-    """Coupe (avec liaison) les notes < 1 temps qui commencent entre deux temps
-    et enjambent le temps suivant."""
+    """Coupe (avec liaison) toute note qui commence entre deux temps
+    et enjambe le temps suivant, quelle que soit sa durée."""
     for el in list(voice.notesAndRests):
-        if el.quarterLength >= 1.0:
+        if isinstance(el, note.Rest):
             continue
         start = el.offset
         end = start + el.quarterLength
+        frac = start % 1
+        if frac < 1e-6 or 1 - frac < 1e-6:
+            continue  # démarre sur un temps
         next_beat = math.floor(start + 1e-6) + 1
-        starts_off_beat = (start % 1) > 1e-6
-        if starts_off_beat and end > next_beat + 1e-6:
+        if end > next_beat + 1e-6:
             first, second = el.splitAtQuarterLength(next_beat - start)
             voice.remove(el)
             voice.insert(start, first)
@@ -268,8 +255,8 @@ def create_music_sheet(melody_voice_in_measure: list, low_voice_in_measure: list
             _split_at_beats(melody_voice)
             _apply_manual_beams(melody_voice, beats_per_measure)
 
-            print(i+1, "mélodie:", melody_voice.highestTime, "basse:", low_voice.highestTime,
-                  "attendu:", beats_per_measure)
+            # print(i+1, "mélodie:", melody_voice.highestTime, "basse:", low_voice.highestTime,
+            #       "attendu:", beats_per_measure)
             measure.insert(0, melody_voice)
             measure.insert(0, low_voice)
             score.append(measure)

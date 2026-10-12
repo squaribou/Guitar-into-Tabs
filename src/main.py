@@ -6,11 +6,11 @@ import pandas as pd
 logging.getLogger("root").setLevel(logging.ERROR)
 
 from constants import SAMPLE_RATE, MAX_TEMPO_BPM
-from basics import predict_from_array, analysis, extract_note_attacks, assign_voice, build_voice_in_measure, view_chords
-from frequence_analyser import get_fft, top_2_fundamental_frequencies
-from audio_listener import listen_audio
+from basics import confidence_correction, analysis, assign_voice, build_voice_in_measure, view_chords, view_notes, predict_from_array, extract_note_attacks
+from old.frequence_analyser import get_fft, top_2_fundamental_frequencies
+from old.audio_listener import listen_audio
 from music_sheet_writter import create_music_sheet, display_music_sheet
-from tempo import view_tempo_drift, assign_note_position, estimate_tempo_from_attacks, correct_notes_from_true_error, extract_attacks_duration, assign_note_quarter_length
+from tempo import view_tempo_drift, assign_note_position, estimate_tempo_from_attacks, correct_notes_from_true_error, assign_note_quarter_length, extract_attacks_duration
 from note_filter import apply_chord_filters
 
 
@@ -46,34 +46,35 @@ def main(file_path, starting_time_in_seconds=0, end_time_in_seconds=None, capo=0
 
     note_df["partition_pitch"] = note_df["pitch"].apply(lambda p: p - capo)
     note_df = assign_voice(note_df)
+    note_df = confidence_correction(note_df)
 
     # ___Possible chords analysis___
-    # print(note_df.head(15))
-    # view_chords(note_df, 2399)
+    # view_chords(note_df, 2660)
+    # view_notes(note_df, 0, 5)
     # return
 
     note_df = apply_chord_filters(note_df)
     note_df = extract_attacks_duration(note_df, model_output["note"])
 
     # ___Getting tempo___
-    tempo_bpm, confidence = estimate_tempo_from_attacks(note_df["onset_time"].unique())
+    candidates = estimate_tempo_from_attacks(note_df["onset_time"].unique())
+    tempo_bpm, confidence = candidates[0] if candidates else (None, 0.0)
     while tempo_bpm > max_tempo_bpm:
         tempo_bpm/= 2
+    print(candidates)
     print(f"BPM found : {tempo_bpm} ({confidence:.2f})")
 
-    # ___Positionning with correction of the notes___
-    note_df  = assign_note_position(note_df, tempo_bpm)
+    note_df = assign_note_position(note_df, tempo_bpm)
     note_df = correct_notes_from_true_error(note_df)
-
     note_df = assign_note_quarter_length(note_df, tempo_bpm)
 
     # ___Analysis of the notes___
     print(note_df.columns.tolist())
     colonnes_utiles = ['onset_time', 'onset_frame', 'partition_pitch', 'pitch', 'confidence', 'measure_position', 'quarter_position_in_measure', 'quarter_length', 'duration', 'voice']
     pd.set_option('display.max_rows', None)
-    print(note_df[colonnes_utiles])
+    # print(note_df[colonnes_utiles])
     # view_tempo_drift(note_df)
-    # analysis(model_output, note_df, tempo_bpm, start_time=30, end_time=40)
+    # analysis(model_output, note_df, tempo_bpm, start_time=0, end_time=10)
     # return
 
     # ___Prepare the voices for the score___
@@ -92,6 +93,8 @@ if __name__ == "__main__":
         main(file_path, starting_time_in_seconds=0, end_time_in_seconds=51, capo=2)
         # file_path = "audio_files/La Boum.wav"
         # main(file_path, starting_time_in_seconds=5, end_time_in_seconds=134)
+        # file_path = "audio_files/Howls Moving Castle.wav"
+        # main(file_path, starting_time_in_seconds=62, end_time_in_seconds=212)
 
         # note_fft(2.1,  0.95, 1.10  )
         # listen_audio(file_path,starting_time_in_seconds=20, duration_in_seconds=40, speed_factor = 0.7)

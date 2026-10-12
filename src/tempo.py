@@ -5,48 +5,53 @@ import pandas as pd
 
 from constants import *
 
-def estimate_tempo_from_attacks(note_df_onset_time, bpm_range=BPM_RANGE, period_resolution=PERIODE_RESOLUTION, tolerance=TOLERANCE, min_ioi=MIN_IOI):
+def estimate_tempo_from_attacks(note_df_onset_time, bpm_range=BPM_RANGE, period_resolution=PERIODE_RESOLUTION,
+                                tolerance=TOLERANCE, min_ioi=MIN_IOI, top_n=5, min_bpm_distance=3.0):
     """
-    Estimates the tempo (BPM) based on a list of note attack times.
-    
-    filtered_attack_times : list of start times (in seconds) for each note
-    bpm_range : plausible tempo range to test (min BPM, max BPM)
-    period_resolution : granularity of the period search (in seconds)
-    tolerance : relative tolerance (fraction of the period) for an IOI to be considered a valid multiple
-    min_ioi : ignores excessively short intervals between notes (ornaments, noise)
+    Estimates the tempo (BPM) candidates based on a list of note attack times.
 
-    Returns (tempo_bpm, confidence_score), where confidence_score is between 0 and 1.
+    top_n : number of tempo candidates to return
+    min_bpm_distance : minimum BPM gap between two returned candidates
+                       (avoids returning 100.0, 100.2, 100.4...)
+
+    Returns a list of (tempo_bpm, confidence_score) sorted by decreasing confidence,
+    where confidence_score is between 0 and 1. Returns [] if no usable interval.
     """
     times = np.sort(np.array(note_df_onset_time))
     iois = np.diff(times)  # inter-onset intervals
     iois = iois[iois > min_ioi]
 
     if len(iois) == 0:
-        return None, 0.0
+        return []
 
     period_min = 60 / bpm_range[1]
     period_max = 60 / bpm_range[0]
     candidate_periods = np.arange(period_min, period_max, period_resolution)
 
-    best_period = None
-    best_score = -1
-
-    for period in candidate_periods:
+    scores = np.empty(len(candidate_periods))
+    for k, period in enumerate(candidate_periods):
         multiples = np.round(iois / period)
         multiples[multiples == 0] = 1
         expected = multiples * period
         relative_error = np.abs(iois - expected) / period
+        scores[k] = np.sum(np.clip(1 - relative_error / tolerance, 0, 1))
 
-        score = np.sum(np.clip(1 - relative_error / tolerance, 0, 1))
+    bpms = 60 / candidate_periods
 
-        if score > best_score:
-            best_score = score
-            best_period = period
+    # --- maxima locaux du score (un pic = un tempo plausible) ---
+    padded = np.concatenate(([-np.inf], scores, [-np.inf]))
+    is_peak = (padded[1:-1] >= padded[:-2]) & (padded[1:-1] >= padded[2:])
+    peak_idx = np.flatnonzero(is_peak)
 
-    tempo_bpm = 60 / best_period
-    confidence = best_score / len(iois)
+    # --- sélection gloutonne : meilleur score d'abord, en écartant les pics trop proches ---
+    selected = []
+    for idx in peak_idx[np.argsort(-scores[peak_idx])]:
+        if all(abs(bpms[idx] - bpms[j]) >= min_bpm_distance for j in selected):
+            selected.append(idx)
+        if len(selected) == top_n:
+            break
 
-    return round(tempo_bpm, 2), round(confidence, 3)
+    return [(round(float(bpms[j]), 2), round(float(scores[j] / len(iois)), 3)) for j in selected]
 
 
 def assign_note_position(note_df, tempo_bpm, allowed_positions=STANDARD_POSITIONS, beats_per_measure=BEATS_PER_MESURE):
@@ -111,15 +116,14 @@ def correct_notes_from_true_error(note_df, smallest_step=SMALLEST_STEP, beats_pe
     offset = n_steps * smallest_step
 
     new_quarter_position = onset_summary["quarter_position_in_measure"].to_numpy() + offset
-    new_measure_position = onset_summary["measure_position"].to_numpy().copy()
+    base_measure = onset_summary["measure_position"].to_numpy()
 
-    below = new_quarter_position < 0
-    new_measure_position[below] -= 1
-    new_quarter_position[below] += beats_per_measure
+    total = base_measure * beats_per_measure + new_quarter_position   # position absolue
+    total = np.round(total / smallest_step) * smallest_step           # recale sur la grille (évite les flottants parasites)
 
-    above = new_quarter_position >= beats_per_measure
-    new_measure_position[above] += 1
-    new_quarter_position[above] -= beats_per_measure
+    new_measure_position = np.floor(total / beats_per_measure + 1e-9).astype(int)
+    new_quarter_position = total - new_measure_position * beats_per_measure
+    new_quarter_position = np.where(np.abs(new_quarter_position) < 1e-9, 0.0, new_quarter_position)
 
     correction_by_time = {
         t: (qpos, mpos)
@@ -160,8 +164,7 @@ def view_tempo_drift(note_df, smallest_step=SMALLEST_STEP, beats_per_measure=BEA
     print(f"Pente (dérive par note) : {slope:.5f}")
     print(f"Ordonnée à l'origine   : {intercept:.5f}")
     axes[1].scatter(x, true_error, color="orange", s=15, zorder=3, label="Points sélectionnés")
-    axes[1].plot(x, slope * x + intercept, color="red",
-                 linestyle="--", label=f"Régression (pente={slope:.5f})")
+    axes[1].plot(x, slope * x + intercept, color="red", linestyle="--", label=f"Régression (pente={slope:.5f})")
 
     print("Window displayed.")
     plt.show()

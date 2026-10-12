@@ -14,13 +14,13 @@ SAMPLE_RATE = 22050
 
 # Note detection parameters
 DISTANCE_FRAMES = 8
-HEIGHT = 0.7 # Height threshold for note detection (confidence)
+HEIGHT = 0.6 # Height threshold for note detection (confidence)
 PROMINENCE = 0.15
-RELATIVE_THERSHOLD = 0.6
+RELATIVE_THERSHOLD = 0.6 
 
 # Note filter parameters
 HARMONIC_INTERVALS = {
-    12: 0.98,  # octave (2nd harmonic) not lower
+    12: 0.95,  # octave (2nd harmonic)
     19: 0.9,   # octave + fifth (3rd harmonic)
     24: 0.8,  # 2 octaves (4th harmonic)
     28: 0.85,  # 2 octaves + major third (5th harmonic)
@@ -28,18 +28,20 @@ HARMONIC_INTERVALS = {
     36: 0.8,   # 3 octaves (8th harmonic)
 }
 RATIO_THRESHOLD = 0.8 # Ratio threshold for melody notes (but especially non-related note)
+THRESHOLD = 0.8
 RATIO_THRESHOLD_LOW_NOTE = 0.8 # Ratio threshold for low notes (but especially non-related note)
 LOW_NOTE_ADJUSTMENT = 1 
 OCTAVE_INTERVALS = {
-    12: 0.96, # not lower
+    12: 0.96,
     24: 0.8,
 }
+CONFIDENCE_CORRECTION = 0.007 #confidence add by half tone under the highest low note
 
 # Tempo parameters
 MIN_IOI = 0.05
 TOLERANCE = 0.10
 PERIODE_RESOLUTION = 0.005
-BPM_RANGE = (40, 300)
+BPM_RANGE = (40, 500)
 MAX_TEMPO_BPM = 100
 
 # Voice separator parameters
